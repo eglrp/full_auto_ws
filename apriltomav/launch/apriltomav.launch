@@ -1,0 +1,6 @@
+<launch>        
+ 
+   <node pkg="apriltomav" type="apriltomav" name="apriltomav" output="screen">
+    <!-- put params here-->
+	</node>
+</launch>
