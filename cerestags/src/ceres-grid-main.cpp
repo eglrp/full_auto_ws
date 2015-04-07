@@ -54,7 +54,7 @@ std::mutex pose_mutex;
 geometry_msgs::Pose globalPose;
 AprilTags::TagDetector* m_tagDetector = NULL;
 AprilTags::TagCodes m_tagCodes(AprilTags::tagCodes25h9);
-RunningStats m_runningStatsX;
+RunningStats m_runningStats[3];
 bool m_timing = false;; // print timing information for each tag extraction call
 int cur = 0;
 bool history[30];
@@ -91,6 +91,7 @@ void wRo_to_euler(const Eigen::Matrix3d& wRo, double& yaw, double& pitch, double
 
 void processImage(cv::Mat& image_gray) {
 
+  static int ignore_cnt = 0;
   double m_tagSize = 0.105; // April tag side length in meters of square black frame
   double m_fx = 824;
   double m_fy = 826;
@@ -167,18 +168,31 @@ void processImage(cv::Mat& image_gray) {
             r.at<double>(1,0), r.at<double>(1,1), r.at<double>(1,2),
             r.at<double>(2,0), r.at<double>(2,1), r.at<double>(2,2);
     double yaw, pitch, roll;
+    double x,y,z;
     wRo_to_euler(wRo, yaw, pitch, roll);
+    x = new_tvec.at<double>(0);
+    y = new_tvec.at<double>(1);
+    z = new_tvec.at<double>(2);
 
-    //add X direction observation to running stats
-    m_runningStatsX.Push(new_tvec.at<double>(0));
-    ROS_INFO("%4d %3.4f %3.4f %3.4f %3.4f %3.4f %3.4f %3.4f %3.4f", detections.size(),
-      new_tvec.at<double>(0), new_tvec.at<double>(1), new_tvec.at<double>(2),
-        yaw,pitch,roll,m_runningStatsX.Mean(),m_runningStatsX.StandardDeviation());
+    //Outlier cleaning    
+    if(  fabs(x - m_runningStats[0].Mean()) > 2 * m_runningStats[0].StandardDeviation()
+      || fabs(y - m_runningStats[1].Mean()) > 2 * m_runningStats[1].StandardDeviation()
+      || fabs(z - m_runningStats[2].Mean()) > 2 * m_runningStats[2].StandardDeviation())
+    {
+      ROS_INFO("Ignore: %4d %3.4f %3.4f %3.4f Tot: %d",detections.size(),x,y,z,++ignore_cnt);
+    }
+
+    m_runningStats[0].Push(x);
+    m_runningStats[1].Push(y);
+    m_runningStats[2].Push(z);
+    ROS_INFO("%4d %3.4f %3.4f %3.4f %3.4f %3.4f %3.4f", detections.size(),
+      x, y, z,
+        yaw,pitch,roll);
     Eigen::Quaterniond q(wRo);
     pose_mutex.lock();
-    globalPose.position.x = new_tvec.at<double>(0);
-    globalPose.position.y = new_tvec.at<double>(1);
-    globalPose.position.z = new_tvec.at<double>(2);
+    globalPose.position.x = z;
+    globalPose.position.y = y;
+    globalPose.position.z = z;
     globalPose.orientation.w = 1.0;//q.w();
     globalPose.orientation.x = 0.0;//q.x();
     globalPose.orientation.y = 0.0;//q.y();
