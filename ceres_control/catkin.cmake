@@ -6,8 +6,6 @@ find_package(catkin REQUIRED COMPONENTS
   message_generation
   geometry_msgs
 )
-#find_package(OpenCV REQUIRED)
-#find_package(Eigen REQUIRED)
 
 # Import the yaml-cpp libraries.
 include(FindPkgConfig)

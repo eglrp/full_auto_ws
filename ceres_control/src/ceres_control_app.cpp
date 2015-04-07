@@ -20,7 +20,7 @@
 using namespace std;
 
 geometry_msgs::Pose cur_pos;
-geometry_msgs::Pose setpoint;
+geometry_msgs::Pose cur_setpoint;
 geometry_msgs::Pose man_sp;
 bool setpoint_enable;
 
@@ -79,7 +79,7 @@ void setPointEnableCallback(const std_msgs::Bool msg){
 
 void setSPCallback(const geometry_msgs::Pose p){
 	ROS_INFO("Received Manual position setpoint.. Updating..");
-	setpoint = p;
+	cur_setpoint = p;
 	return;
 }
 
@@ -106,7 +106,7 @@ void detStatsCb(const ceres_control::DetectionStats ds_msg){
 float distanceFromTarget(){
 	geometry_msgs::Pose p1,p2;
 	p1 = cur_pos;
-	p2 = setpoint;
+	p2 = cur_setpoint;
 	return sqrt((p1.position.x-p2.position.x)*(p1.position.x-p2.position.x) + 
 		(p1.position.y-p2.position.y)*(p1.position.y-p2.position.y) + 
 			(p1.position.z-p2.position.z)*(p1.position.z-p2.position.z));
@@ -134,52 +134,69 @@ int main(int argc, char **argv)
   //some init stuff
   int count = 0;
   setpoint_enable = false;
+  prev_setpoint.position.x = 0.;
+  prev_setpoint.position.y = 0.;
+  prev_setpoint.position.z = 0.;
+  prev_setpoint.orientation.x = 0.;
+  prev_setpoint.orientation.y = 0.;
+  prev_setpoint.orientation.z = 0.;
+  prev_setpoint.orientation.w = 1.;
 
-  //main loop
-  while (ros::ok()){		
-		if(!setpoint_enable){
-			sp.pose = cur_pos;
+  while (ros::ok())
+  {
+	if(!setpoint_enable){
+		float x_diff = sp.pose.position.x - cur_pos.position.x;
+		float y_diff = sp.pose.position.y - cur_pos.position.y;
+		float z_diff = sp.pose.position.z - cur_pos.position.z;
+		
+		//validate setpoint sanity	here
+		if (abs(x_diff) > 3.0 || abs(y_diff) > 3.0 || abs(z_diff) > 3.0){
+			ROS_INFO("RED_FLAG: Insane setpoint request, sending current position, please make a sensible setpoint request!");
+			sp.pose = prev_setpoint;
+			// TODO: shift to manual control?
 		}
 		else{
-			float x_diff = setpoint.position.x - cur_pos.position.x;
-			float y_diff = setpoint.position.y - cur_pos.position.y;
-			float z_diff = setpoint.position.z - cur_pos.position.z;
-			
-			//validate setpoint sanity	here
-			if (abs(x_diff) > 3.0 || abs(y_diff) > 3.0 || abs(z_diff) > 3.0){
-				ROS_INFO("RED_FLAG: Insane setpoint request, sending current position, please make a sensible setpoint request!");
-				sp.pose = cur_pos;
-			}
-			else{
-				//if setpoint valid send a setpoint in increments of 100th
-				sp.pose.position.x = cur_pos.position.x + x_diff/100;
-				sp.pose.position.y = cur_pos.position.y + y_diff/100;
-				sp.pose.position.z = cur_pos.position.z + z_diff/100;
-				sp.pose.orientation.x = 0;	//TODO: set yaw value here as a quaternion change if needed
-			 	sp.pose.orientation.y = 0;
-			 	sp.pose.orientation.z = 0;
-			 	sp.pose.orientation.w = 1;
-			}
+			sp.pose = cur_pos;
 		}
-		sp.header.seq = count;
-		sp.header.frame_id = count;
-		sp.header.stamp = ros::Time::now();
-		set_pos_publisher.publish(sp);
+	}
+	else{
+		float x_diff = cur_setpoint.position.x - cur_pos.position.x;
+		float y_diff = cur_setpoint.position.y - cur_pos.position.y;
+		float z_diff = cur_setpoint.position.z - cur_pos.position.z;
+		
+		//validate setpoint sanity	here
+		if (abs(x_diff) > 3.0 || abs(y_diff) > 3.0 || abs(z_diff) > 3.0){
+			ROS_INFO("RED_FLAG: Insane setpoint request, sending current position, please make a sensible setpoint request!");
+			sp.pose = prev_setpoint;
+			// TODO: shift to manual control?
+		}
+		else{
+			//if setpoint valid send a setpoint in increments of 100th
+			sp.pose.position.x = cur_pos.position.x + x_diff;
+			sp.pose.position.y = cur_pos.position.y + y_diff;
+			sp.pose.position.z = cur_pos.position.z + z_diff;
+			sp.pose.orientation.x = 0;	//TODO: set yaw value here as a quaternion change if needed
+		 	sp.pose.orientation.y = 0;
+		 	sp.pose.orientation.z = 0;
+		 	sp.pose.orientation.w = 1;
+    	}
+   }
+	sp.header.seq = count;
+	sp.header.frame_id = count;
+	sp.header.stamp = ros::Time::now();
 
- 		//print info every second   
-	    if(!(count % 10)){
-	    	ROS_INFO("Current position is: %f %f %f",cur_pos.position.x,cur_pos.position.y,cur_pos.position.z);
-	    	ROS_INFO("Current setpoint is: %f %f %f",setpoint.position.x,setpoint.position.y,setpoint.position.z);	
-	    	ROS_INFO("Current setpoint being sent to MAVROS is: %f %f %f",sp.pose.position.x,sp.pose.position.y,sp.pose.position.z);
-	    	ROS_INFO("Distance from setpoint is : %f",distanceFromTarget());
-	    }
-
-	    // if no apriltags go to MISSION
-
+	set_pos_publisher.publish(sp);
+	prev_setpoint = sp.pose;
 
     ros::spinOnce();
     loop_rate.sleep();
-
+    
+    if(!(count % 10)){
+    	ROS_INFO("Current position is: %f %f %f",cur_pos.position.x,cur_pos.position.y,cur_pos.position.z);
+    	ROS_INFO("Current setpoint is: %f %f %f",cur_setpoint.position.x,cur_setpoint.position.y,cur_setpoint.position.z);	
+    	ROS_INFO("Current setpoint being sent to MAVROS is: %f %f %f",sp.pose.position.x,sp.pose.position.y,sp.pose.position.z);
+    	ROS_INFO("Distance from setpoint is : %f",distanceFromTarget());
+    }
     ++count;
   }
 
