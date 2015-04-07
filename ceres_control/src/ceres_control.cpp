@@ -38,13 +38,13 @@ void setPointEnableCallback(const std_msgs::Bool msg){
 	else
 		ROS_INFO("Disabling Setpoint Mode");
 	setpoint_enable = msg.data;
-	setpoint = cur_pos;		// So that after enabling manual setpoint input, till a manual setpoint is sent we HOLD position
+	cur_setpoint = cur_pos;		// So that after enabling manual setpoint input, till a manual setpoint is sent we HOLD position
 	return;
 }
 
 void setSPCallback(const geometry_msgs::Pose p){
 	ROS_INFO("Received Manual position setpoint.. Updating..");
-	setpoint = p;
+	cur_setpoint = p;
 	return;
 }
 
@@ -52,7 +52,7 @@ void setSPCallback(const geometry_msgs::Pose p){
 float distanceFromTarget(){
 	geometry_msgs::Pose p1,p2;
 	p1 = cur_pos;
-	p2 = setpoint;
+	p2 = cur_setpoint;
 	return sqrt((p1.position.x-p2.position.x)*(p1.position.x-p2.position.x) + 
 		(p1.position.y-p2.position.y)*(p1.position.y-p2.position.y) + 
 			(p1.position.z-p2.position.z)*(p1.position.z-p2.position.z));
@@ -98,7 +98,7 @@ int main(int argc, char **argv)
 		//validate setpoint sanity	here
 		if (abs(x_diff) > 3.0 || abs(y_diff) > 3.0 || abs(z_diff) > 3.0){
 			ROS_INFO("RED_FLAG: Insane setpoint request, sending current position, please make a sensible setpoint request!");
-			sp = prev_setpoint;
+			sp.pose = prev_setpoint;
 			// TODO: shift to manual control?
 		}
 		else{
@@ -106,9 +106,9 @@ int main(int argc, char **argv)
 		}
 	}
 	else{
-		float x_diff = setpoint.position.x - cur_pos.position.x;
-		float y_diff = setpoint.position.y - cur_pos.position.y;
-		float z_diff = setpoint.position.z - cur_pos.position.z;
+		float x_diff = cur_setpoint.position.x - cur_pos.position.x;
+		float y_diff = cur_setpoint.position.y - cur_pos.position.y;
+		float z_diff = cur_setpoint.position.z - cur_pos.position.z;
 		
 		//validate setpoint sanity	here
 		if (abs(x_diff) > 3.0 || abs(y_diff) > 3.0 || abs(z_diff) > 3.0){
@@ -132,13 +132,14 @@ int main(int argc, char **argv)
 	sp.header.stamp = ros::Time::now();
 
 	set_pos_publisher.publish(sp);
- 
+	prev_setpoint = sp.pose;
+
     ros::spinOnce();
     loop_rate.sleep();
     
     if(!(count % 10)){
     	ROS_INFO("Current position is: %f %f %f",cur_pos.position.x,cur_pos.position.y,cur_pos.position.z);
-    	ROS_INFO("Current setpoint is: %f %f %f",setpoint.position.x,setpoint.position.y,setpoint.position.z);	
+    	ROS_INFO("Current setpoint is: %f %f %f",cur_setpoint.position.x,cur_setpoint.position.y,cur_setpoint.position.z);	
     	ROS_INFO("Current setpoint being sent to MAVROS is: %f %f %f",sp.pose.position.x,sp.pose.position.y,sp.pose.position.z);
     	ROS_INFO("Distance from setpoint is : %f",distanceFromTarget());
     }

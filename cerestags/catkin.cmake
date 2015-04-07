@@ -49,7 +49,7 @@ link_directories(
 	 lib/
 )
 
-add_executable(cerestags src/ceres-tags-main.cpp)
+add_executable(cerestags src/ceres-grid-main.cpp)
 target_link_libraries(cerestags ${catkin_LIBRARIES})
 target_link_libraries(cerestags ${Eigen_LIBRARIES})
 target_link_libraries(cerestags ${OpenCV_LIBRARIES})

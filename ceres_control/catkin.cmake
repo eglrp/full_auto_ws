@@ -33,7 +33,7 @@ catkin_package(
     #             message_generation
 #		 message_runtime
  #                geometry_msgs
-        ../../../../../../../opt/ros/hydro/include
+        ../../../../../../../opt/ros/indigo/include
 
 )
 
