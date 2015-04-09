@@ -24,14 +24,14 @@ generate_messages(DEPENDENCIES
 # Set up the ROS Catkin package settings
 catkin_package(
   INCLUDE_DIRS 
-#include
- # CATKIN_DEPENDS std_msgs
-  #               roscpp
-   #              cmake_modules
-    #             message_generation
-#		 message_runtime
- #                geometry_msgs
-        ../../../../../../../opt/ros/indigo/include
+#   include
+#   CATKIN_DEPENDS std_msgs
+#   roscpp
+#   cmake_modules
+#   message_generation
+#		message_runtime
+#   geometry_msgs
+    ../../../../../../../opt/ros/indigo/include
 
 )
 

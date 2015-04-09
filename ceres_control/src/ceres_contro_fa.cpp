@@ -14,31 +14,70 @@
 #include <sstream>
 #include <fstream>
 
+#include "mavros/CommandBool.h"
+#include "ceres_control/DetectionStats.h"
+
 using namespace std;
 
 geometry_msgs::Pose cur_pos;
 geometry_msgs::Pose cur_setpoint;
 geometry_msgs::Pose man_sp;
-geometry_msgs::Pose prev_setpoint;
 bool setpoint_enable;
+
+bool in_offboard = false;	//TODO: this assumes we start in Manual- use the mode service call later
+
+// ROS service call to programmatically enable offboard
+// TODO: have made node global because of this - solve elegantly by puttin gin a class later
+bool toggleOffboard(bool state){
+	ros::NodeHandle node;
+	ros::ServiceClient offboard_caller = node.serviceClient<mavros::CommandBool>("/mavros/cmd/guided_enable");
+	mavros::CommandBool offboard_cmd;
+	offboard_cmd.request.value = state;
+ 	if(offboard_caller.call(offboard_cmd)){
+ 		ROS_INFO("ROS service call successful!");
+ 		return true;
+ 	}
+	else{
+ 		ROS_INFO("ROS service call successful!");
+		return false;
+	}
+	delete node;
+}
+
+// TODO: ROS service call to programmatically enable LOITER
+bool toggleLoiter(bool state){
+	ros::NodeHandle node;
+	ros::ServiceClient loiter_caller = node.serviceClient<mavros::CommandBool>("/mavros/set_mode");
+	mavros::CommandBool loiter_cmd;
+	loiter_cmd.request.value = state;
+ 	if(offboard_caller.call(offboard_cmd)){
+ 		ROS_INFO("ROS service call successful!");
+ 		return true;
+ 	}
+	else{
+ 		ROS_INFO("ROS service call successful!");
+		return false;
+	}
+	delete node;
+}
 
 void curPosCallback(const geometry_msgs::PoseStamped cur_position)
 {
 	cur_pos = cur_position.pose;
+	if(distanceFromTarget() < 0.05){
+		// TODO: has converged to current setpoint
+		// pull next setpoint
+	}
 	return;
-}
+}	
 
-/**
-This should only be called when quad is stable and we are receving 
-good vision estimates
-*/
 void setPointEnableCallback(const std_msgs::Bool msg){
 	if(msg.data)
 		ROS_INFO("Enabling Setpoint Mode");
 	else
 		ROS_INFO("Disabling Setpoint Mode");
 	setpoint_enable = msg.data;
-	cur_setpoint = cur_pos;		// So that after enabling manual setpoint input, till a manual setpoint is sent we HOLD position
+	setpoint = cur_pos;		// So that after enabling manual setpoint input, till a manual setpoint is sent we HOLD position
 	return;
 }
 
@@ -46,6 +85,25 @@ void setSPCallback(const geometry_msgs::Pose p){
 	ROS_INFO("Received Manual position setpoint.. Updating..");
 	cur_setpoint = p;
 	return;
+}
+
+//TODO: if this threshold is too high debug using lower values
+void detStatsCb(const ceres_control::DetectionStats ds_msg){
+	//TODO: what about going back? handle later & what about MISSION mode- how?
+	if(ds_msg.det_percentage > 60.0 && !in_offboard){
+		ROS_INFO("Detected AprilTag for more than 50 percent time in the last 3 seconds, going to offboard");
+		if(toggleOffboard(true)){
+			ROS_INFO("Successfully toggled to Offboard");
+			in_offboard = true;
+		}
+	}
+	else if(ds_msg.det_percentage < 30.0 && in_offboard){
+		ROS_INFO("Not detecting enough AprilTags, going to manual");
+		if(toggleOffboard(false)){
+			ROS_INFO("Successfully toggled to Manual");
+			in_offboard = false;
+		}
+	}
 }
 
 // TODO: refactor with some ROS equivalent to reduce code
@@ -58,26 +116,26 @@ float distanceFromTarget(){
 			(p1.position.z-p2.position.z)*(p1.position.z-p2.position.z));
 }
 
+
 int main(int argc, char **argv)
 {
-  struct timeval tv;
-  gettimeofday(&tv,NULL);
-
+	//ROS stuff
   ROS_INFO("Ceres Control node started.");
-
   ros::init(argc, argv, "ceres_control");
-  ros::NodeHandle node;
-  
-  geometry_msgs::PoseStamped p,sp;
+	// TODO: fix this- node is global right now so that offboard service call can be made without additional stack overhead
+	ros::NodeHandle node;
 
+  ros::Rate loop_rate(10);	//TODO: find out ideal rate?
+  
+  //msg & pub sub stuff
+  geometry_msgs::PoseStamped p,sp;
   ros::Publisher set_pos_publisher = node.advertise<geometry_msgs::PoseStamped>("/ceres_control/set_position",100);
   ros::Subscriber cur_pos_subscriber = node.subscribe<geometry_msgs::PoseStamped>("/mavros/position/local",100,&curPosCallback);
   ros::Subscriber setpoint_enable_sub = node.subscribe<std_msgs::Bool>("/ceres_control/setpoint_enable",100,&setPointEnableCallback);
   ros::Subscriber man_setpoint_sub = node.subscribe<geometry_msgs::Pose>("/ceres_control/set_setpoint",100,&setSPCallback);
-
-  ros::Rate loop_rate(10);
-
-  //initialize
+  ros::Subscriber at_det_stats_sub = node.subscribe<ceres_control::ATDetectionStats>("/apriltomav/at_det_stats",10,&detStatsCb);
+		
+  //some init stuff
   int count = 0;
   setpoint_enable = false;
   prev_setpoint.position.x = 0.;

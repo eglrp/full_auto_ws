@@ -190,7 +190,7 @@ void processImage(cv::Mat& image_gray) {
         yaw,pitch,roll);
     Eigen::Quaterniond q(wRo);
     pose_mutex.lock();
-    globalPose.position.x = z;
+    globalPose.position.x = x;
     globalPose.position.y = y;
     globalPose.position.z = z;
     globalPose.orientation.w = 1.0;//q.w();
