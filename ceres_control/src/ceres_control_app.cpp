@@ -15,76 +15,136 @@
 #include <fstream>
 
 #include "mavros/CommandBool.h"
+#include "mavros/State.h"
 #include "ceres_control/DetectionStats.h"
+#include "ceres_control/ChangeState.h"
+
+/*
+
+TODO:
+	* Decision based on modes in inner while loop
+	* Cascade Mode Strategy
+	* FS should be last mode and any strategy can set mode to FS
+	* Do we need a switch to manual anymore now that we have radio?
+	* Listen to /mavros/state to see if we are in manual
+	* Define LocalLoiter to loiter around a safe setpoint
+
+Notes:
+	* So during any intermediate stage should we ask Quad to drift?
+	* Merge Loiter and Control SP modes as LocalLoiter
+	* We can then keep changing the local loiter setpoints
+	* And have a safe setpoint as the last known safe local loiter point
+
+Useful Stuff:
+	* http://wiki.ros.org/mavros/Plugins
+	* http://wiki.ros.org/mavros/FcuModes
+	* Use the FCU Modes to control the entire GPS sequence- the mavros change mode 
+		allows us to put the quad in AUTO.MISSION and AUTO.LOITER mode
+	* Use Plugins for finding out about GPS convergence and for controlling modes
+
+*/
 
 using namespace std;
 
-geometry_msgs::Pose cur_pos;
+geometry_msgs::Pose safe_setpoint;
+geometry_msgs::Pose cur_position;
 geometry_msgs::Pose cur_setpoint;
-geometry_msgs::Pose man_sp;
-bool setpoint_enable;
 
+bool setpoint_enable;
 bool in_offboard = false;	//TODO: this assumes we start in Manual- use the mode service call later
 
+geometry_msgs::Pose path[5];
+path[0].position.x = 0.0;
+path[0].position.y = 0.0;
+path[0].position.z = 3.0;
+
+path[1].position.x = 0.0;
+path[1].position.y = 1.0;
+path[1].position.z = 3.0;
+
+path[2].position.x = 1.0;
+path[2].position.y = 1.0;
+path[2].position.z = 3.0;
+
+path[3].position.x = 1.0;
+path[3].position.y = 0.0;
+path[3].position.z = 1.0;
+
+path[4].position.x = 0.0;
+path[4].position.y = 0.0;
+path[4].position.z = 1.0;
+
+int cur_path_ind = 0;
+
+enum State{
+	Manual,				//Quad being controlled manually
+	LocalLoiter,	//Quad loitering around a safe constant vision setpoint
+	Drift,				//Quad does not have vision setpoints AND does not know what to do
+								// Should this ever happen? TODO
+	Path,					//Quad following path
+	GPS,					//Quad being controlle in GPS
+	FS 						//Quad control in Failsafe mode
+};
+State quad_state = State.LocalLoiter;
+
 // ROS service call to programmatically enable offboard
-// TODO: have made node global because of this - solve elegantly by puttin gin a class later
-bool toggleOffboard(bool state){
+bool toggleOffboardLoiter(bool state){
 	ros::NodeHandle node;
 	ros::ServiceClient offboard_caller = node.serviceClient<mavros::CommandBool>("/mavros/cmd/guided_enable");
 	mavros::CommandBool offboard_cmd;
 	offboard_cmd.request.value = state;
  	if(offboard_caller.call(offboard_cmd)){
- 		ROS_INFO("ROS service call successful!");
+ 		quad_state = LocalLoiter;
  		return true;
  	}
 	else{
- 		ROS_INFO("ROS service call successful!");
+ 		quad_state = Manual;
 		return false;
 	}
 	delete node;
+	delete offboard_caller;
+	delete offboard_cmd;
 }
 
-// ROS service call to programmatically enable LOITER
-bool toggleLoiter(bool state){
+// TODO: ROS service call to programmatically enable GPS mode
+bool changeMode(int mode){
 	ros::NodeHandle node;
-	ros::ServiceClient loiter_caller = node.serviceClient<mavros::CommandBool>("/mavros/set_mode");
-	mavros::CommandBool loiter_cmd;
-	loiter_cmd.request.value = state;
- 	if(offboard_caller.call(offboard_cmd)){
- 		ROS_INFO("ROS service call successful!");
+	ros::ServiceClient gps_caller = node.serviceClient<mavros::CommandBool>("/mavros/set_mode");
+	mavros::SetMode gps_mode;
+	gps_mode.request.base_mode = mode;
+ 	if(gps_caller.call(gps_mode)){
+ 		quad_state = GPS;
  		return true;
  	}
 	else{
- 		ROS_INFO("ROS service call successful!");
+ 		quad_state = LocalLoiter;
 		return false;
 	}
 	delete node;
+	delete gps_cmd;
+	delete gps_caller;
 }
 
-void curPosCallback(const geometry_msgs::PoseStamped cur_position)
+void curPosCallback(const geometry_msgs::PoseStamped cps)
 {
-	cur_pos = cur_position.pose;
+	cur_position = cps.pose;
 	return;
 }	
 
-void setPointEnableCallback(const std_msgs::Bool msg){
-	if(msg.data)
-		ROS_INFO("Enabling Setpoint Mode");
-	else
-		ROS_INFO("Disabling Setpoint Mode");
-	setpoint_enable = msg.data;
-	setpoint = cur_pos;		// So that after enabling manual setpoint input, till a manual setpoint is sent we HOLD position
+void switchModeCallback(const ceres_control::ChangeMode msg){
+	ROS_INFO("Received Manual setpoint.. Updating..");
 	return;
 }
 
-void setSPCallback(const geometry_msgs::Pose p){
-	ROS_INFO("Received Manual position setpoint.. Updating..");
+void setManualSetpointCallback(const geometry_msgs::Pose p){
+	ROS_INFO("Received Manual setpoint.. Updating..");
 	cur_setpoint = p;
+	quad_state = Control_SP;
 	return;
 }
 
 //TODO: if this threshold is too high debug using lower values
-void detStatsCb(const ceres_control::DetectionStats ds_msg){
+void detectionStatsCallback(const ceres_control::DetectionStats ds_msg){
 	//TODO: what about going back? handle later & what about MISSION mode- how?
 	if(ds_msg.det_percentage > 60.0 && !in_offboard){
 		ROS_INFO("Detected AprilTag for more than 50 percent time in the last 3 seconds, going to offboard");
@@ -103,13 +163,14 @@ void detStatsCb(const ceres_control::DetectionStats ds_msg){
 }
 
 // TODO: refactor with some ROS equivalent to reduce code
-float distanceFromTarget(){
-	geometry_msgs::Pose p1,p2;
-	p1 = cur_pos;
-	p2 = cur_setpoint;
+float distanceFromTarget(geometry_msgs::Pose p1,geometry_msgs::Pose p2){
 	return sqrt((p1.position.x-p2.position.x)*(p1.position.x-p2.position.x) + 
 		(p1.position.y-p2.position.y)*(p1.position.y-p2.position.y) + 
 			(p1.position.z-p2.position.z)*(p1.position.z-p2.position.z));
+}
+
+bool isValid(Pose p){
+	//TODO: fill later
 }
 
 
@@ -117,85 +178,139 @@ int main(int argc, char **argv)
 {
 	//ROS stuff
   ROS_INFO("Ceres Control node started.");
-  ros::init(argc, argv, "ceres_control");
-	// TODO: fix this- node is global right now so that offboard service call can be made without additional stack overhead
+  ros::init(argc, argv, "CeresControllerNode");
 	ros::NodeHandle node;
 
   ros::Rate loop_rate(10);	//TODO: find out ideal rate?
   
   //msg & pub sub stuff
   geometry_msgs::PoseStamped p,sp;
-  ros::Publisher set_pos_publisher = node.advertise<geometry_msgs::PoseStamped>("/ceres_control/set_position",100);
-  ros::Subscriber cur_pos_subscriber = node.subscribe<geometry_msgs::PoseStamped>("/mavros/position/local",100,&curPosCallback);
-  ros::Subscriber setpoint_enable_sub = node.subscribe<std_msgs::Bool>("/ceres_control/setpoint_enable",100,&setPointEnableCallback);
-  ros::Subscriber man_setpoint_sub = node.subscribe<geometry_msgs::Pose>("/ceres_control/set_setpoint",100,&setSPCallback);
-  ros::Subscriber at_det_stats_sub = node.subscribe<ceres_control::ATDetectionStats>("/apriltomav/at_det_stats",10,&detStatsCb);
+
+  // It has one job
+  ros::Publisher setpoint_publisher = node.advertise<geometry_msgs::PoseStamped>("/ceres_control/send_setpoint",100);
+
+  // Information sources relevent to control
+  ros::Subscriber cur_pos_subscriber = node.subscribe<geometry_msgs::PoseStamped>("/mavros/position/local",5,&curPosCallback);
+  ros::Subscriber cur_state_subscriber = node.subscribe<mavros::State>("/mavros/state",100,&curPosCallback);
+  ros::Subscriber setpoint_enable_sub = node.subscribe<std_msgs::Bool>("/ceres_control/setpoint_enable",5,&setPointEnableCallback);
+  ros::Subscriber state_sub = node.subscribe<ceres_control::ChangeState>("/ceres_control/change_state",5,&changeStateCallback);
+  ros::Subscriber man_setpoint_sub = node.subscribe<geometry_msgs::Pose>("/ceres_control/set_setpoint",5,&setSPCallback);
+  ros::Subscriber det_stats_sub = node.subscribe<ceres_control::DetectionStats>("/cerestags/at_det_stats",5,&detectionStatsCb);
 		
   //some init stuff
   int count = 0;
   setpoint_enable = false;
-  prev_setpoint.position.x = 0.;
-  prev_setpoint.position.y = 0.;
-  prev_setpoint.position.z = 0.;
-  prev_setpoint.orientation.x = 0.;
-  prev_setpoint.orientation.y = 0.;
-  prev_setpoint.orientation.z = 0.;
-  prev_setpoint.orientation.w = 1.;
+  quad_state = State.LocalLoiter;
+  safe_setpoint.position.x = 0.;
+  safe_setpoint.position.y = 0.;
+  safe_setpoint.position.z = 0.;
+  safe_setpoint.orientation.x = 0.;
+  safe_setpoint.orientation.y = 0.;
+  safe_setpoint.orientation.z = 0.;
+  safe_setpoint.orientation.w = 3.;
 
   while (ros::ok())
   {
-	if(!setpoint_enable){
-		float x_diff = sp.pose.position.x - cur_pos.position.x;
-		float y_diff = sp.pose.position.y - cur_pos.position.y;
-		float z_diff = sp.pose.position.z - cur_pos.position.z;
-		
-		//validate setpoint sanity	here
-		if (abs(x_diff) > 3.0 || abs(y_diff) > 3.0 || abs(z_diff) > 3.0){
-			ROS_INFO("RED_FLAG: Insane setpoint request, sending current position, please make a sensible setpoint request!");
-			sp.pose = prev_setpoint;
-			// TODO: shift to manual control?
-		}
-		else{
-			sp.pose = cur_pos;
-		}
-	}
-	else{
-		float x_diff = cur_setpoint.position.x - cur_pos.position.x;
-		float y_diff = cur_setpoint.position.y - cur_pos.position.y;
-		float z_diff = cur_setpoint.position.z - cur_pos.position.z;
-		
-		//validate setpoint sanity	here
-		if (abs(x_diff) > 3.0 || abs(y_diff) > 3.0 || abs(z_diff) > 3.0){
-			ROS_INFO("RED_FLAG: Insane setpoint request, sending current position, please make a sensible setpoint request!");
-			sp.pose = prev_setpoint;
-			// TODO: shift to manual control?
-		}
-		else{
-			//if setpoint valid send a setpoint in increments of 100th
-			sp.pose.position.x = cur_pos.position.x + x_diff;
-			sp.pose.position.y = cur_pos.position.y + y_diff;
-			sp.pose.position.z = cur_pos.position.z + z_diff;
-			sp.pose.orientation.x = 0;	//TODO: set yaw value here as a quaternion change if needed
-		 	sp.pose.orientation.y = 0;
-		 	sp.pose.orientation.z = 0;
-		 	sp.pose.orientation.w = 1;
-    	}
-   }
-	sp.header.seq = count;
-	sp.header.frame_id = count;
-	sp.header.stamp = ros::Time::now();
+  	switch(quad_state){
 
-	set_pos_publisher.publish(sp);
-	prev_setpoint = sp.pose;
+			case LocalLoiter:
+			float x_diff = sp.pose.position.x - cur_position.position.x;
+			float y_diff = sp.pose.position.y - cur_position.position.y;
+			float z_diff = sp.pose.position.z - cur_position.position.z;
+			
+			//validate setpoint sanity	here
+			if (abs(x_diff) > 3.0 || abs(y_diff) > 3.0 || abs(z_diff) > 3.0){
+				ROS_INFO("RED_FLAG: Insane setpoint request, sending current position, please make a sensible setpoint request!");
+				sp.pose = safe_setpoint;
+				// TODO: shift to manual control? FS mode?
+			}
+			else{
+				sp.pose = cur_position;
+			}
+			break;
+
+/*			case SP_control:
+			float x_diff = cur_setpoint.position.x - cur_position.position.x;
+			float y_diff = cur_setpoint.position.y - cur_position.position.y;
+			float z_diff = cur_setpoint.position.z - cur_position.position.z;
+			
+			//validate setpoint sanity here
+			if (abs(x_diff) > 3.0 || abs(y_diff) > 3.0 || abs(z_diff) > 3.0){
+				ROS_INFO("RED_FLAG: Insane setpoint request, sending current position, please make a sensible setpoint request!");
+				sp.pose = safe_setpoint;
+				// TODO: shift to manual control? FS mode?
+			}
+			else{
+				//if setpoint valid send a setpoint
+				// TODO: x_diff can be divided by any multiple to acheive speed
+				sp.pose.position.x = cur_position.position.x + x_diff;
+				sp.pose.position.y = cur_position.position.y + y_diff;
+				sp.pose.position.z = cur_position.position.z + z_diff;
+				sp.pose.orientation.x = 0;	//TODO: set yaw value here as a quaternion change if needed
+			 	sp.pose.orientation.y = 0;
+			 	sp.pose.orientation.z = 0;
+			 	sp.pose.orientation.w = 1;
+			}
+		  break;
+*/			
+			case PATH:
+			if(distanceFromTarget(cur_setpoint,cur_position) > 0.1){
+				cur_setpoint = path[cur_path_ind];
+			}
+			else{
+				ROS_INFO("Moving to next setpoint in path");
+				cur_path_ind++;
+				cur_setpoint = path[cur_path_ind];
+			}
+
+			float x_diff = cur_setpoint.position.x - cur_position.position.x;
+			float y_diff = cur_setpoint.position.y - cur_position.position.y;
+			float z_diff = cur_setpoint.position.z - cur_position.position.z;
+			
+			//validate setpoint sanity here
+			if (abs(x_diff) > 3.0 || abs(y_diff) > 3.0 || abs(z_diff) > 3.0){
+				ROS_INFO("RED_FLAG: Insane setpoint request, sending current position, please make a sensible setpoint request!");
+				sp.pose = safe_setpoint;
+				// TODO: shift to manual control? FS mode?
+			}
+			else{
+				//if setpoint valid send a setpoint
+				// TODO: x_diff can be divided by any multiple to acheive speed
+				sp.pose.position.x = cur_position.position.x + x_diff;
+				sp.pose.position.y = cur_position.position.y + y_diff;
+				sp.pose.position.z = cur_position.position.z + z_diff;
+				sp.pose.orientation.x = 0;	//TODO: set yaw value here as a quaternion change if needed
+			 	sp.pose.orientation.y = 0;
+			 	sp.pose.orientation.z = 0;
+			 	sp.pose.orientation.w = 1;
+			}		
+			
+			break;
+
+
+		  case GPS:
+
+		  case FS:
+			sp.pose = safe_setpoint;
+		  break;
+
+		}
+
+		sp.header.seq = count;
+		sp.header.frame_id = "local_origin";
+		sp.header.stamp = ros::Time::now();
+
+		set_pos_publisher.publish(sp);
+		safe_setpoint = sp.pose;
 
     ros::spinOnce();
     loop_rate.sleep();
     
     if(!(count % 10)){
-    	ROS_INFO("Current position is: %f %f %f",cur_pos.position.x,cur_pos.position.y,cur_pos.position.z);
+    	ROS_INFO("Current position is: %f %f %f",cur_position.position.x,cur_position.position.y,cur_position.position.z);
     	ROS_INFO("Current setpoint is: %f %f %f",cur_setpoint.position.x,cur_setpoint.position.y,cur_setpoint.position.z);	
     	ROS_INFO("Current setpoint being sent to MAVROS is: %f %f %f",sp.pose.position.x,sp.pose.position.y,sp.pose.position.z);
-    	ROS_INFO("Distance from setpoint is : %f",distanceFromTarget());
+    	ROS_INFO("Distance from setpoint is : %f",distanceFromTarget(cur_setpoint,cur_position));
     }
     ++count;
   }

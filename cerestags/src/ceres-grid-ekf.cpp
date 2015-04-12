@@ -94,7 +94,7 @@ void wRo_to_euler(const Eigen::Matrix3d& wRo, double& yaw, double& pitch, double
 void processImage(cv::Mat& image_gray) {
 
   static int ignore_cnt = 0;
-  double m_tagSize = 0.105; // April tag side length in meters of square black frame
+  double m_tagSize = 0.105; //April tag side length in meters of square black frame
   double m_fx = 824;
   double m_fy = 826;
   double m_px = 335;
@@ -110,10 +110,7 @@ void processImage(cv::Mat& image_gray) {
     ROS_INFO("Extracting tags took %f seconds.",dt);
   }
 
-  // ROS_INFO("Detected %d number of detections",detections.size());
-
   if(detections.size()){
-    //stack all ps and Ps and solvePnP
     std::vector<cv::Point3f> objPts;
     std::vector<cv::Point2f> imgPts;
     double s = 0.105/2.;
@@ -162,8 +159,8 @@ void processImage(cv::Mat& image_gray) {
     cv::Mat r;
     cv::Rodrigues(rvec, r);
 
-    r = r.t();  // rotation of inverse
-    cv::Mat new_tvec(-r * tvec); // translation of inverse
+    r = r.t();
+    cv::Mat new_tvec(-r * tvec);
 
     Eigen::Matrix3d wRo;
     wRo <<  r.at<double>(0,0), r.at<double>(0,1), r.at<double>(0,2), 
@@ -176,12 +173,12 @@ void processImage(cv::Mat& image_gray) {
     y = new_tvec.at<double>(1);
     z = new_tvec.at<double>(2);
 
-    //Outlier cleaning    
+    //Outlier flagging
     if(  fabs(x - m_runningStats[0].Mean()) > 2 * m_runningStats[0].StandardDeviation()
       || fabs(y - m_runningStats[1].Mean()) > 2 * m_runningStats[1].StandardDeviation()
       || fabs(z - m_runningStats[2].Mean()) > 2 * m_runningStats[2].StandardDeviation())
     {
-      ROS_INFO("Ignore: %4d %3.4f %3.4f %3.4f Tot: %d",detections.size(),x,y,z,++ignore_cnt);
+      ROS_INFO("Flag: %4d %3.4f %3.4f %3.4f Tot: %d",detections.size(),x,y,z,++ignore_cnt);
     }
 
     m_runningStats[0].Push(x);
@@ -201,9 +198,9 @@ void processImage(cv::Mat& image_gray) {
     globalPose.orientation.z = 0.0;//q.z();
 
     globalPoseWC.pose = globalPose;
-    globalPoseWC.covariance[0] = m_runningStats[0].Variance();
-    globalPoseWC.covariance[7] = m_runningStats[1].Variance();
-    globalPoseWC.covariance[14] = m_runningStats[2].Variance();
+    globalPoseWC.covariance[0] = 0.0000000001;//m_runningStats[0].Variance();
+    globalPoseWC.covariance[7] = 0.0000000001;//m_runningStats[1].Variance();
+    globalPoseWC.covariance[14] = 0.0000000001;//m_runningStats[2].Variance();
     globalPoseWC.covariance[21] = 0.0;
     globalPoseWC.covariance[28] = 0.0; 
     globalPoseWC.covariance[35] = 0.0;
@@ -246,10 +243,10 @@ int main(int argc, char **argv)
   image_transport::Subscriber sub = it.subscribe("/usb_cam/image_raw", 1, imageCallback);
 
   geometry_msgs::PoseStamped p;
-  ros::Publisher pose_publisher = nh.advertise<geometry_msgs::PoseStamped>("/cerestags/vision",100);
+  ros::Publisher pose_publisher = nh.advertise<geometry_msgs::PoseStamped>("/cerestags/vision",1);
 
   geometry_msgs::PoseWithCovarianceStamped pwc;
-  ros::Publisher pwc_publisher = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>("/cerestags/visionWC",100);
+  ros::Publisher pwc_publisher = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>("/cerestags/visionWC",1);
   memset(&globalPoseWC.covariance,0,sizeof(globalPoseWC.covariance));
 	
   cerestags::DetectionStats stats_msg;
@@ -277,7 +274,7 @@ int main(int argc, char **argv)
       p.header.frame_id = cnt;
       p.header.stamp = ros::Time::now();
       pwc.header.seq = cnt;
-      pwc.header.frame_id = "map";
+      pwc.header.frame_id = "vision";
       pwc.header.stamp = ros::Time::now();
       pwc_publisher.publish(pwc);
     }
