@@ -49,13 +49,24 @@ link_directories(
 	 lib/
 )
 
-add_executable(cerestags src/ceres-grid-ekf.cpp)
-target_link_libraries(cerestags ${catkin_LIBRARIES})
-target_link_libraries(cerestags ${Eigen_LIBRARIES})
-target_link_libraries(cerestags ${OpenCV_LIBRARIES})
-target_link_libraries(cerestags libapriltags.a)
-add_dependencies(cerestags ${PROJECT_NAME}_gencpp)
+add_executable(ceresgrid src/ceres-grid-multi.cpp)
+target_link_libraries(ceresgrid ${catkin_LIBRARIES})
+target_link_libraries(ceresgrid ${Eigen_LIBRARIES})
+target_link_libraries(ceresgrid ${OpenCV_LIBRARIES})
+target_link_libraries(ceresgrid libapriltags.a)
+add_dependencies(ceresgrid ${PROJECT_NAME}_gencpp)
 
-install(TARGETS cerestags
+install(TARGETS ceresgrid
+  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION} 
+)
+
+add_executable(ceresgrid-ekf src/ceres-grid-ekf.cpp)
+target_link_libraries(ceresgrid-ekf ${catkin_LIBRARIES})
+target_link_libraries(ceresgrid-ekf ${Eigen_LIBRARIES})
+target_link_libraries(ceresgrid-ekf ${OpenCV_LIBRARIES})
+target_link_libraries(ceresgrid-ekf libapriltags.a)
+add_dependencies(ceresgrid-ekf ${PROJECT_NAME}_gencpp)
+
+install(TARGETS ceresgrid-ekf
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION} 
 )

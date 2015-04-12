@@ -15,13 +15,15 @@
 #include <std_msgs/Bool.h>
 #include "mavros/CommandBool.h"
 #include "mavros/State.h"
+#include "ceres_control/DetectionStats"
 
 #include <sstream>
 #include <fstream>
 
 using namespace std;
 
-atomic<geometry_msgs::Pose> cur_pos();
+// atomic<geometry_msgs::Pose> cur_pos();
+geometry_msgs::Pose cur_pos;
 geometry_msgs::Pose cur_setpoint;
 geometry_msgs::Pose safe_setpoint;
 geometry_msgs::Pose home_position;
@@ -31,10 +33,6 @@ bool loiter_enable;
 bool path_enable;
 bool offboard_enable;
 int cur_path_index;
-
-mutex sp_mutex;
-mutex mode_mutex;
-mutex cp_mutex;
 
 // TODO: refactor with some ROS equivalent to reduce code
 float distanceFromTarget(){
@@ -80,32 +78,23 @@ void initHome(){
 
 void resetCallback(const std_msgs::Bool msg){
 	if(msg.data){
-		ROS_INFO("Resetting Ceres Control.. Will loiter around home postion now..");
+		ROS_INFO("Resetting Ceres Control.. Will loiter around home postion if in offboard..");
 		initHome();
-		mode_mutex.lock()
 		loiter_enable = true;
 		path_enable = false;
 		offboard_enable = false;
-		mode_mutex.unlock();
 	}
 }
 
 void curPosCallback(const geometry_msgs::PoseStamped cur_position)
 {
-	cp_mutex.lock();
 	cur_pos = cur_position.pose;
-	mode_mutex.lock();
 	if(path_enable){
 		if(distanceFromTarget() < 0.05){
 			cur_path_index = (cur_path_index + 1) % 5;
 		}
-		sp_mutex.lock();
 		cur_setpoint = path[cur_path_index];
-		sp_mutex.unlock();
 	}
-	mode_mutex.unlock();
-	cp_mutex.unlock();
-
 	return;
 }
 
@@ -161,14 +150,19 @@ void offboardAndLoiterCallback(const std_msgs::Bool msg){
 		if(enableOffboard(true)){
 			std_msgs::Bool x;
 			x.data = true;
-			loiterEnableCallback(x);	
+			loiterEnableCallback(x);
 		}
 		else{
 			ROS_INFO("Cannot enable offboard..Try again..");
 		}	
 	}
 	else{
-		enableOffboard(false);
+		if(enableOffboard(false))
+			ROS_INFO("Disabled offboard..");
+		else{
+			ROS_INFO("Cannot disable offboard.. DANGER! Exiting Ceres Control.. Use RC now!!");
+			exit(0);
+		}
 		//TODO
 	}
 }
@@ -208,6 +202,10 @@ void setSPCallback(const geometry_msgs::Pose p){
 	return;
 }
 
+void detectionStatsCallback(){
+	
+}
+
 
 int main(int argc, char **argv)
 {
@@ -224,10 +222,13 @@ int main(int argc, char **argv)
   ros::Subscriber cur_pos_subscriber = node.subscribe<geometry_msgs::PoseStamped>("/mavros/position/local",5,&curPosCallback);
   //loiter setpoint sub
   ros::Subscriber man_setpoint_sub = node.subscribe<geometry_msgs::Pose>("/ceres_control/set_setpoint",5,&setSPCallback);
+  //detection stats sub
+  ros::Subscriber man_setpoint_sub = node.subscribe<geometry_msgs::Pose>("/ceres_control/set_setpoint",5,&setSPCallback);
 	//mode chage subs  
   ros::Subscriber path_enable_sub = node.subscribe<std_msgs::Bool>("/ceres_control/path_enable",5,&pathEnableCallback);
   ros::Subscriber loiter_enable_sub = node.subscribe<std_msgs::Bool>("/ceres_control/loiter_enable",5,&loiterEnableCallback);
   ros::Subscriber offloiter_enable_sub = node.subscribe<std_msgs::Bool>("/ceres_control/offboard_loiter_enable",5,&offboardAndLoiterCallback);
+  ros::Subscriber reset_sub = node.subscribe<std_msgs::Bool>("/ceres_control/reset",5,&resetCallback);
 
   ros::Rate loop_rate(10);
 
