@@ -94,7 +94,7 @@ void wRo_to_euler(const Eigen::Matrix3d& wRo, double& yaw, double& pitch, double
 void processImage(cv::Mat& image_gray) {
 
   static int ignore_cnt = 0;
-  double m_tagSize = 0.105; //April tag side length in meters of square black frame
+  double m_tagSize = 0.127; //April tag side length in meters of square black frame
   double m_fx = 824;
   double m_fy = 826;
   double m_px = 335;
@@ -113,7 +113,7 @@ void processImage(cv::Mat& image_gray) {
   if(detections.size()){
     std::vector<cv::Point3f> objPts;
     std::vector<cv::Point2f> imgPts;
-    double s = 0.105/2.;
+    double s = m_tagSize/2.;
     double centre_dist = 0.3;
     int grid_c = 5;
     double x_c,y_c;  // bottom left AT, x y
@@ -266,19 +266,20 @@ int main(int argc, char **argv)
 
   while (ros::ok())
   {
-    if(updated){
+    // if(updated){
       pose_mutex.lock();
       p.pose = globalPose;
       pwc.pose = globalPoseWC;
       pose_mutex.unlock();
       p.header.seq = cnt;
-      p.header.frame_id = cnt;
+      p.header.frame_id = "vision";
       p.header.stamp = ros::Time::now();
       pwc.header.seq = cnt;
       pwc.header.frame_id = "vision";
       pwc.header.stamp = ros::Time::now();
       pwc_publisher.publish(pwc);
-    }
+      pose_publisher.publish(p);
+    // }
     //update history
     if(updated)
       history[cur] = true;
@@ -307,7 +308,7 @@ int main(int argc, char **argv)
     // plus we are doing heavyweight work in callback so spin once will block execution
     // of this while loop anyway
     ros::spinOnce();
-    loop_rate.sleep();
+    // loop_rate.sleep();
     cnt++;
   }
 

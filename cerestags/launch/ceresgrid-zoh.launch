@@ -1,0 +1,5 @@
+<launch>        
+    <node pkg="cerestags" type="ceresgrid-zoh" name="cerestags" output="screen">
+    <!-- put params here-->
+	</node>
+</launch>

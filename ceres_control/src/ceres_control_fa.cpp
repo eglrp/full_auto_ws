@@ -203,7 +203,7 @@ void setSPCallback(const geometry_msgs::Pose p){
 }
 
 void detectionStatsCallback(){
-	
+	//TODO
 }
 
 
@@ -223,7 +223,7 @@ int main(int argc, char **argv)
   //loiter setpoint sub
   ros::Subscriber man_setpoint_sub = node.subscribe<geometry_msgs::Pose>("/ceres_control/set_setpoint",5,&setSPCallback);
   //detection stats sub
-  ros::Subscriber man_setpoint_sub = node.subscribe<geometry_msgs::Pose>("/ceres_control/set_setpoint",5,&setSPCallback);
+  ros::Subscriber det_stats_sub = node.subscribe<ceres_control::DetectionStats>("/cerestags/det_stats",5,&detectionStatsCallback);
 	//mode chage subs  
   ros::Subscriber path_enable_sub = node.subscribe<std_msgs::Bool>("/ceres_control/path_enable",5,&pathEnableCallback);
   ros::Subscriber loiter_enable_sub = node.subscribe<std_msgs::Bool>("/ceres_control/loiter_enable",5,&loiterEnableCallback);
@@ -239,6 +239,7 @@ int main(int argc, char **argv)
   cur_path_index = 0;
   safe_setpoint = home_position;
 
+  //TODO: streamline this with the knowledge of threading
   while (ros::ok())
   {
 		if(!loiter_enable && !path_enable){

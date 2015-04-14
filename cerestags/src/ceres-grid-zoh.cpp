@@ -59,8 +59,6 @@ bool m_timing = false;; // print timing information for each tag extraction call
 int cur = 0;
 bool history[30];
 bool updated;
-ros::Publisher pose_publisher;
-int cnt;
 
 double tic() {
   struct timeval t;
@@ -92,7 +90,7 @@ void wRo_to_euler(const Eigen::Matrix3d& wRo, double& yaw, double& pitch, double
 }
 
 void processImage(cv::Mat& image_gray) {
-  geometry_msgs::PoseStamped p;
+
   static int ignore_cnt = 0;
   double m_tagSize = 0.127; // April tag side length in meters of square black frame
   double m_fx = 824;
@@ -116,7 +114,7 @@ void processImage(cv::Mat& image_gray) {
     //stack all ps and Ps and solvePnP
     std::vector<cv::Point3f> objPts;
     std::vector<cv::Point2f> imgPts;
-    double s = 0.127/2.;
+    double s = m_tagSize/2.;
     double centre_dist = 0.3;
     int grid_c = 5;
     double x_c,y_c;  // bottom left AT, x y
@@ -191,6 +189,7 @@ void processImage(cv::Mat& image_gray) {
       x, y, z,
         yaw,pitch,roll);
     Eigen::Quaterniond q(wRo);
+    pose_mutex.lock();
     globalPose.position.x = x;
     globalPose.position.y = y;
     globalPose.position.z = z;
@@ -198,11 +197,8 @@ void processImage(cv::Mat& image_gray) {
     globalPose.orientation.x = 0.0;//q.x();
     globalPose.orientation.y = 0.0;//q.y();
     globalPose.orientation.z = 0.0;//q.z();
-    p.pose = globalPose;
-    p.header.seq = cnt++;
-    p.header.frame_id = "vision";
-    p.header.stamp = ros::Time::now();
-    pose_publisher.publish(p);
+    pose_mutex.unlock();
+    updated = true;
   }
 }
 
@@ -239,12 +235,61 @@ int main(int argc, char **argv)
   image_transport::ImageTransport it(nh);    
   image_transport::Subscriber sub = it.subscribe("/usb_cam/image_raw", 1, imageCallback);
 
-  pose_publisher = nh.advertise<geometry_msgs::PoseStamped>("/cerestags/vision",100);
-	cnt = 0;
+  geometry_msgs::PoseStamped p;
+  ros::Publisher pose_publisher = nh.advertise<geometry_msgs::PoseStamped>("/cerestags/vision",100);
+	
+  cerestags::DetectionStats stats_msg;
+  ros::Publisher dets_stats_pub = 
+      nh.advertise<cerestags::DetectionStats>("/cerestags/det_stats",100);
+
+  int cnt = 0;
+  //init stats stuff
+  for(int i = 0; i < 30; i++)
+    history[i] = false;
+  cur = 0;
+  updated = false;
+
+  ros::Rate loop_rate(10);
   ROS_INFO("Ceres Tags node started.");
-  ros::AsyncSpinner s(4);
-  s.start();
-  ros::waitForShutdown();
+
+  while (ros::ok())
+  {
+    // if(updated){
+      pose_mutex.lock();
+      p.pose = globalPose;
+      pose_mutex.unlock();
+      p.header.seq = cnt;
+      p.header.frame_id = "vision";
+      p.header.stamp = ros::Time::now();
+      pose_publisher.publish(p);
+    // }
+    //update history
+    if(updated)
+      history[cur] = true;
+    else
+      history[cur] = false;
+    updated = false;
+    cur = (cur + 1) % 30;
+
+    //calculate stats
+    int dets = 0;
+    for(int i = 0; i < 30; i++){
+    if(history[i])
+        dets++;
+    }
+    stats_msg.det_percentage = dets/10.0 * 100;
+    // TODO: dummy right now, update later
+    stats_msg.det_fps = 0.;
+    stats_msg.secs_till_last = 5;
+
+    // NOTE: publishing at 2 Hz
+    if(!(cnt % 5))
+      dets_stats_pub.publish(stats_msg);
+
+    ros::spinOnce();
+    // loop_rate.sleep();
+    cnt++;
+  }
 
   ROS_INFO("CeresTags node stopped.");
   return EXIT_SUCCESS;

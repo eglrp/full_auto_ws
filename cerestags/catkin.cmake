@@ -49,7 +49,7 @@ link_directories(
 	 lib/
 )
 
-add_executable(ceresgrid src/ceres-grid-multi.cpp)
+add_executable(ceresgrid src/ceres-grid-main.cpp)
 target_link_libraries(ceresgrid ${catkin_LIBRARIES})
 target_link_libraries(ceresgrid ${Eigen_LIBRARIES})
 target_link_libraries(ceresgrid ${OpenCV_LIBRARIES})
@@ -68,5 +68,16 @@ target_link_libraries(ceresgrid-ekf libapriltags.a)
 add_dependencies(ceresgrid-ekf ${PROJECT_NAME}_gencpp)
 
 install(TARGETS ceresgrid-ekf
+  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION} 
+)
+
+add_executable(ceresgrid-zoh src/ceres-grid-zoh.cpp)
+target_link_libraries(ceresgrid-zoh ${catkin_LIBRARIES})
+target_link_libraries(ceresgrid-zoh ${Eigen_LIBRARIES})
+target_link_libraries(ceresgrid-zoh ${OpenCV_LIBRARIES})
+target_link_libraries(ceresgrid-zoh libapriltags.a)
+add_dependencies(ceresgrid-zoh ${PROJECT_NAME}_gencpp)
+
+install(TARGETS ceresgrid-zoh
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION} 
 )
