@@ -47,8 +47,9 @@ const double TWOPI = 2.0*PI;
 
 const double TAG_SIZE = 0.12; //in mts
 const double ANN_TAG_SIZE = 1.00; //in mts
-using namespace std;
+const int HISTORY_WINDOW = 15;
 
+using namespace std;
 
 //global stuff
 std::mutex pose_mutex;
@@ -59,8 +60,10 @@ AprilTags::TagCodes m_tagCodes(AprilTags::tagCodes25h9);
 RunningStats m_runningStats[3];
 bool m_timing = false;; // print timing information for each tag extraction call
 int cur = 0;
-bool history[30];
+bool history[HISTORY_WINDOW];
 bool updated;
+bool enable_zoh;
+double prev_t,cur_t;
 
 double tic() {
   struct timeval t;
@@ -206,6 +209,8 @@ void processImage(cv::Mat& image_gray) {
     globalPoseWC.covariance[35] = 0.0;
     pose_mutex.unlock();
     updated = true;
+    prev_t = cur_t;
+    cur_t = tic();
   }
 }
 
@@ -223,9 +228,12 @@ void imageCallback(const sensor_msgs::ImageConstPtr& msg)
   }
   
   cv::Mat cur_image_gray = subscribed_ptr->image;
-	processImage(cur_image_gray);
+  processImage(cur_image_gray);
 }
 
+void zohEnableCallback(const std_msgs::Bool msg){
+  enable_zoh = msg.data;
+}
 
 int main(int argc, char **argv)
 {
@@ -243,30 +251,33 @@ int main(int argc, char **argv)
   // queue size 1 because we want to work with the latest image always
   image_transport::Subscriber sub = it.subscribe("/usb_cam/image_raw", 1, imageCallback);
 
+  ros::Subscriber enable_zoh_sub = 
+      nh.subscribe<std_msgs::Bool>("/cerestags/zoh_enable",1,&zohEnableCallback);
+
   geometry_msgs::PoseStamped p;
   ros::Publisher pose_publisher = nh.advertise<geometry_msgs::PoseStamped>("/cerestags/vision",1);
 
   geometry_msgs::PoseWithCovarianceStamped pwc;
   ros::Publisher pwc_publisher = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>("/cerestags/visionWC",1);
   memset(&globalPoseWC.covariance,0,sizeof(globalPoseWC.covariance));
-	
+  
   cerestags::DetectionStats stats_msg;
   ros::Publisher dets_stats_pub = 
       nh.advertise<cerestags::DetectionStats>("/cerestags/det_stats",100);
 
-  int cnt = 0;
   //init stats stuff
-  for(int i = 0; i < 30; i++)
-    history[i] = false;
+  int cnt = 0;
   cur = 0;
+  for(int i = 0; i < HISTORY_WINDOW; i++)
+    history[i] = false;
   updated = false;
 
-  ros::Rate loop_rate(10);
-  ROS_INFO("Ceres Tags node started.");
+  enable_zoh = false;
 
+  ROS_INFO("Ceres Tags node started.");
   while (ros::ok())
   {
-    // if(updated){
+    if(updated || enable_zoh){
       pose_mutex.lock();
       p.pose = globalPose;
       pwc.pose = globalPoseWC;
@@ -279,36 +290,29 @@ int main(int argc, char **argv)
       pwc.header.stamp = ros::Time::now();
       pwc_publisher.publish(pwc);
       pose_publisher.publish(p);
-    // }
+    }
+
     //update history
     if(updated)
       history[cur] = true;
     else
       history[cur] = false;
     updated = false;
-    cur = (cur + 1) % 30;
+    cur = (cur + 1) % HISTORY_WINDOW;
 
     //calculate stats
     int dets = 0;
-    for(int i = 0; i < 30; i++){
-    if(history[i])
+    for(int i = 0; i < HISTORY_WINDOW; i++){
+      if(history[i])
         dets++;
     }
-    stats_msg.det_percentage = dets/10.0 * 100;
-    // TODO: dummy right now, update later
-    stats_msg.det_fps = 0.;
-    stats_msg.secs_till_last = 5;
+    stats_msg.det_percentage = float(dets)/float(HISTORY_WINDOW) * 100.0;
+    stats_msg.det_fps = 0.; //TODO: update fps later
+    stats_msg.secs_till_last = cur_t - prev_t;
+    dets_stats_pub.publish(stats_msg);
 
-    // NOTE: publishing at 2 Hz
-    if(!(cnt % 5))
-      dets_stats_pub.publish(stats_msg);
-
-    // we spin without any sleep because uniformity in vision is not important
-    // its more important to get ASAP vision
-    // plus we are doing heavyweight work in callback so spin once will block execution
-    // of this while loop anyway
+    //NOTE: we continuously spin as fast as we can
     ros::spinOnce();
-    // loop_rate.sleep();
     cnt++;
   }
 
