@@ -1,6 +1,7 @@
 #include <iostream>
 #include <vector>
 #include <algorithm>
+#include <string>
 #include <time.h>
 #include <math.h>
 #include <mutex>
@@ -15,6 +16,7 @@
 #include <std_msgs/Bool.h>
 #include "mavros/CommandBool.h"
 #include "mavros/State.h"
+#include "mavros/SetMode.h"
 #include "ceres_control/DetectionStats"
 
 #include <sstream>
@@ -22,7 +24,6 @@
 
 using namespace std;
 
-// atomic<geometry_msgs::Pose> cur_pos();
 geometry_msgs::Pose cur_pos;
 geometry_msgs::Pose cur_setpoint;
 geometry_msgs::Pose safe_setpoint;
@@ -32,6 +33,7 @@ geometry_msgs::Pose path[5];
 bool loiter_enable;
 bool path_enable;
 bool offboard_enable;
+bool auto_mission_enable;
 int cur_path_index;
 
 // TODO: refactor with some ROS equivalent to reduce code
@@ -76,18 +78,25 @@ void initHome(){
 	return;
 }
 
+void init(){
+	initHome();
+	cur_path_index = 0;
+  safe_setpoint = home_position;
+  loiter_enable = true;
+	path_enable = false;
+	offboard_enable = false;
+	auto_mission_enable = false;
+	//TODO: send to MANUAL mode
+}
+
 void resetCallback(const std_msgs::Bool msg){
 	if(msg.data){
-		ROS_INFO("Resetting Ceres Control.. Will loiter around home postion if in offboard..");
-		initHome();
-		loiter_enable = true;
-		path_enable = false;
-		offboard_enable = false;
+		ROS_INFO("Resetting Ceres Control.. Find out what to be done!");
+		init();
 	}
 }
 
-void curPosCallback(const geometry_msgs::PoseStamped cur_position)
-{
+void curPosCallback(const geometry_msgs::PoseStamped cur_position){
 	cur_pos = cur_position.pose;
 	if(path_enable){
 		if(distanceFromTarget() < 0.05){
@@ -98,26 +107,46 @@ void curPosCallback(const geometry_msgs::PoseStamped cur_position)
 	return;
 }
 
+// TODO : remove this later once switchMode works
 // ROS service call to programmatically enable offboard
 bool enableOffboard(bool state){
-	if(offboard_enable == state)
-		return true;
+	if(offboard_enable == state){
+		ros::NodeHandle node;
+		ros::ServiceClient offboard_caller = node.serviceClient<mavros::CommandBool>("/mavros/cmd/guided_enable");
+		mavros::CommandBool offboard_cmd;
+		offboard_cmd.request.value = state;
+	 	if(offboard_caller.call(offboard_cmd)){
+	 		ROS_INFO("Successfully changed mode");
+	 		return true;
+	 	}
+	 	else{
+	 		ROS_INFO("Cannot change mode");
+	 		return false;
+	 	}
+		delete &node;
+		delete &offboard_caller;
+		delete &offboard_cmd;
+	}
+}
+
+// ROS service call to programmatically change mode
+bool switchMode(string cm){
 	ros::NodeHandle node;
-	ros::ServiceClient offboard_caller = node.serviceClient<mavros::CommandBool>("/mavros/cmd/guided_enable");
-	mavros::CommandBool offboard_cmd;
-	offboard_cmd.request.value = state;
- 	if(offboard_caller.call(offboard_cmd)){
- 		offboard_enable = state;
- 		ROS_INFO("Successfully changed mode");
+	ros::ServiceClient mode_srv_cli = node.serviceClient<mavros::CommandBool>("/mavros/SetMode");
+	mavros::SetMode mode_srv;
+	mode_srv.base_mode = 0;
+	mode_srv.custom_mode = cm;
+ 	if(mode_srv_cli.call(mode_srv)){
+ 		ROS_INFO("Successfully changed mode to %s",cm);
  		return true;
  	}
  	else{
- 		ROS_INFO("Cannot change mode");
+ 		ROS_INFO("Cannot change mode to %s",cm);
  		return false;
  	}
 	delete &node;
-	delete &offboard_caller;
-	delete &offboard_cmd;
+	delete &mode_srv_cli;
+	delete &mode_srv;
 }
 
 /**
@@ -202,10 +231,37 @@ void setSPCallback(const geometry_msgs::Pose p){
 	return;
 }
 
-void detectionStatsCallback(){
-	//TODO
-}
 
+/*
+CUSTOM MODES that we might use
+"MANUAL"
+"ALTCTL"
+"OFFBOARD"
+"AUTO.MISSION"
+"AUTO.LOITER"
+"AUTO.RTL"
+"AUTO.LAND"
+"AUTO.TAKEOFF"
+*/
+
+const int DETECTION_THRESHOLD 30;
+void detectionStatsCallback(const ceres_control::DetectionStats ds_msg){
+	//TODO: what about going back? handle later & what about MISSION mode- how?
+	if( (ds_msg.det_percentage > DETECTION_THRESHOLD) && offboard_enable )
+	{
+		ROS_INFO("Detected CT for > 60 percent time, going to OFFBOARD");
+		if(switchMode("OFFBOARD")){
+			ROS_INFO("Successfully toggled to OFFBOARD");
+		}
+	}
+	else if(ds_msg.det_percentage < DETECTION_THRESHOLD && auto_mission_enable)
+	{
+		ROS_INFO("Not enough CT, going to AUTO.MISSION");
+		if(switchMode("AUTO.MISSION")){
+			ROS_INFO("Successfully toggled to AUTO.MISSION");
+		}
+	}
+}
 
 int main(int argc, char **argv)
 {
@@ -233,15 +289,18 @@ int main(int argc, char **argv)
   ros::Rate loop_rate(10);
 
   //initialize
-  int count = 0;
-  loiter_enable = false;
-  path_enable = false;
-  cur_path_index = 0;
-  safe_setpoint = home_position;
+  init();
+	int count = 0;
 
   //TODO: streamline this with the knowledge of threading
   while (ros::ok())
   {
+
+  	// TODO: act on current mode
+  	/*
+		Listen to State
+  	*/
+
 		if(!loiter_enable && !path_enable){
 			float x_diff = sp.pose.position.x - cur_pos.position.x;
 			float y_diff = sp.pose.position.y - cur_pos.position.y;
@@ -267,7 +326,6 @@ int main(int argc, char **argv)
 			if (abs(x_diff) > 3.0 || abs(y_diff) > 3.0 || abs(z_diff) > 3.0){
 				ROS_INFO("RED_FLAG: Insane setpoint request, sending safe_setpoint, please make a sensible setpoint request!");
 				sp.pose = safe_setpoint;
-				// TODO: shift to manual control?
 			}
 			else{
 				sp.pose.position.x = cur_pos.position.x + x_diff;
@@ -288,7 +346,6 @@ int main(int argc, char **argv)
 			if (abs(x_diff) > 3.0 || abs(y_diff) > 3.0 || abs(z_diff) > 3.0){
 				ROS_INFO("RED_FLAG: Insane setpoint request, sending safe_setpoint, please make a sensible setpoint request!");
 				sp.pose = safe_setpoint;
-				// TODO: shift to manual control?
 			}
 			else{
 				//if setpoint valid send a setpoint in increments of 10th
