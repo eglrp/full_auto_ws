@@ -15,7 +15,7 @@
 #include <std_msgs/Bool.h>
 #include "mavros/CommandBool.h"
 #include "mavros/State.h"
-#include "ceres_control/DetectionStats"
+#include "ceres_control/DetectionStats.h"
 
 #include <sstream>
 #include <fstream>
@@ -206,9 +206,33 @@ void detectionStatsCallback(){
 	//TODO
 }
 
+string cur_mode = "MANUAL";
+bool off_loiter;
+void mavStateCallback(mavros::State msg){
+	if(msg.mode == "AUTO.MISSION"){
+		//do something
+		ROS_INFO("Mode: AUTO.MISSION");
+	}
+	else if (msg.mode == "MANUAL"){
+		if(off_loiter){
+			off_loiter = false;
+			ROS_INFO("Mode: MANUAL.. disabling loiter");
+		}
+	}
+	else if(msg.mode == "OFFBOARD"){
+		if(!off_loiter){
+			ROS_INFO("Mode: OFFBOARD.. enabling loiter");
+			std_msgs::Bool x;
+			x.data = true;
+			loiterEnableCallback(x);			
+			off_loiter = true;
+		}
+	}
+}
 
 int main(int argc, char **argv)
 {
+	off_loiter = false;
   ros::init(argc, argv, "ceres_control");
   ros::NodeHandle node;
   
@@ -223,12 +247,13 @@ int main(int argc, char **argv)
   //loiter setpoint sub
   ros::Subscriber man_setpoint_sub = node.subscribe<geometry_msgs::Pose>("/ceres_control/set_setpoint",5,&setSPCallback);
   //detection stats sub
-  ros::Subscriber det_stats_sub = node.subscribe<ceres_control::DetectionStats>("/cerestags/det_stats",5,&detectionStatsCallback);
+  // ros::Subscriber det_stats_sub = node.subscribe<ceres_control::DetectionStats>("/cerestags/det_stats",5,&detectionStatsCallback);
 	//mode chage subs  
   ros::Subscriber path_enable_sub = node.subscribe<std_msgs::Bool>("/ceres_control/path_enable",5,&pathEnableCallback);
   ros::Subscriber loiter_enable_sub = node.subscribe<std_msgs::Bool>("/ceres_control/loiter_enable",5,&loiterEnableCallback);
   ros::Subscriber offloiter_enable_sub = node.subscribe<std_msgs::Bool>("/ceres_control/offboard_loiter_enable",5,&offboardAndLoiterCallback);
   ros::Subscriber reset_sub = node.subscribe<std_msgs::Bool>("/ceres_control/reset",5,&resetCallback);
+  ros::Subscriber state_sub = node.subscribe<mavros::State>("/mavros/state",5,&mavStateCallback);
 
   ros::Rate loop_rate(10);
 
