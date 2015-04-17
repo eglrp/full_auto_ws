@@ -15,9 +15,18 @@ add_message_files(DIRECTORY msg FILES
   ChangeState.msg
 )
 
+# add_service_files(FILES
+#   ModeOffLoiter.srv
+#   ModeOffSetpoint.srv
+#   ModeAutoLoiter.srv
+#   ModeAutoMission.srv
+#   ModePath.srv
+#   Offboard.srv
+# )
+
 generate_messages(DEPENDENCIES
-    std_msgs
-    geometry_msgs
+  std_msgs
+  geometry_msgs
 )
 
 # Set up the ROS Catkin package settings
@@ -39,15 +48,7 @@ include_directories(
     ${catkin_INCLUDE_DIRS}
 )
 
-add_executable(ceres_control src/ceres_control.cpp)
-target_link_libraries(ceres_control ${catkin_LIBRARIES})
-add_dependencies(ceres_control ${PROJECT_NAME}_gencpp)
-
-install(TARGETS ceres_control
-  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION} 
-)
-
-add_executable(ceres_control_app src/ceres_control_fa.cpp)
+add_executable(ceres_control_app src/ceres_control_app_fa.cpp)
 target_link_libraries(ceres_control_app ${catkin_LIBRARIES})
 add_dependencies(ceres_control_app ${PROJECT_NAME}_gencpp)
 

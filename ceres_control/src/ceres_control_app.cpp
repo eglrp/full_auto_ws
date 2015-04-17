@@ -76,7 +76,7 @@ path[4].position.z = 1.0;
 
 int cur_path_ind = 0;
 
-enum State{
+enum Mode{
 	Manual,				//Quad being controlled manually
 	LocalLoiter,	//Quad loitering around a safe constant vision setpoint
 	Drift,				//Quad does not have vision setpoints AND does not know what to do
