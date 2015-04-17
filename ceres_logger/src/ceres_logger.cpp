@@ -22,14 +22,6 @@
 
 using namespace std;
 
-/*
-TODO:
-  print out logging info
-  have timeouts on nodes to alert if one is not working
- 
-
-*/
-
 geometry_msgs::cur_cp;
 geometry_msgs::cur_ct;
 geometry_msgs::cur_sp;
@@ -40,11 +32,19 @@ void ctCallback(const geometry_msgs::PoseStamped ct){
 }
 
 void cpCallback(const geometry_msgs::PoseStamped cp){
+  static ros::Time prev_t = ros::Time::now();
   cur_cp = cp.pose;
+  if ((ros::Time::now() - prev_t).toSec() < 0.5)
+    ROS_INFO("Timeout on current position topic");
+  prev_t = ros::Time::now();
 }
 
 void spCallback(const geometry_msgs::PoseStamped sp){
+  static ros::Time prev_t = ros::Time::now();
   cur_sp = sp.pose;
+  if ((ros::Time::now() - prev_t).toSec() < 0.5)
+    ROS_INFO("Timeout on current setpoint topic");
+  prev_t = ros::Time::now();
 }
 
 int main(int argc, char **argv)
@@ -61,17 +61,20 @@ int main(int argc, char **argv)
   ros::Subscriber sp_sub = node.subscribe<geometry_msgs::PoseStamped>("/ceres_control/set_position",5,&spCallback);
   ros::Subscriber ct_sub = node.subscribe<geometry_msgs::PoseStamped>("/cerestags/vision",5,&ctCallback);
 
-  ros::Rate loop_rate(15);
+  ros::Rate loop_rate(10);
 
   while (ros::ok())
   {
     ros::spinOnce();
+    // NOTE: time is current time and not time of update of individual data
     ROS_INFO("Time: %f\tCP: %f %f %f\tSP: %f %f %f\tCT: %f %f %f",
-      ros::Time::now(),)
+      ros::Time::now(),cur_cp.pose.x,cur_cp.pose.y,cur_cp.pose.z,
+        cur_sp.pose.x,cur_sp.pose.y,cur_sp.pose.z,
+          cur_ct.pose.x,cur_ct.pose.y,cur_ct.pose.z);
     loop_rate.sleep();
   }
 
-  ROS_INFO("April to MAV Translator node stopped.");
+  ROS_INFO("Ceres logger node stopped.");
 
   return EXIT_SUCCESS;
 }
