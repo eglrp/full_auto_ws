@@ -1,0 +1,5 @@
+<launch>        
+ 
+    <node pkg="cereslogger" type="cereslogger" name="cereslogger" output="screen">
+	</node>
+</launch>

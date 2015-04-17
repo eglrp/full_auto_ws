@@ -33,6 +33,8 @@ bool loiter_enable;
 bool path_enable;
 bool offboard_enable;
 int cur_path_index;
+// takes care of the modes as either setpoint or switch loiter
+bool switch_loiter;
 
 // TODO: refactor with some ROS equivalent to reduce code
 float distanceFromTarget(){
@@ -48,27 +50,27 @@ float distanceFromTarget(){
 void initHome(){
 	path[0].position.x = 0.0;
 	path[0].position.y = 0.0;
-	path[0].position.z = 4.0;
+	path[0].position.z = 1.0;
 
 	path[1].position.x = 0.0;
 	path[1].position.y = 1.0;
-	path[1].position.z = 4.0;
+	path[1].position.z = 1.0;
 
 	path[2].position.x = 1.0;
 	path[2].position.y = 1.0;
-	path[2].position.z = 4.0;
+	path[2].position.z = 1.0;
 
 	path[3].position.x = 1.0;
 	path[3].position.y = 0.0;
-	path[3].position.z = 4.0;
+	path[3].position.z = 1.0;
 
 	path[4].position.x = 0.0;
 	path[4].position.y = 0.0;
-	path[4].position.z = 4.0;
+	path[4].position.z = 1.0;
 
 	home_position.position.x = 0.;
 	home_position.position.y = 0.;
-	home_position.position.z = 4.;
+	home_position.position.z = 1.;
 	home_position.orientation.x = 0.;
 	home_position.orientation.y = 0.;
 	home_position.orientation.z = 0.;
@@ -206,28 +208,27 @@ void detectionStatsCallback(){
 	//TODO
 }
 
-string cur_mode = "MANUAL";
 bool off_loiter;
 void mavStateCallback(mavros::State msg){
-	if(msg.mode == "AUTO.MISSION"){
-		//do something
-		ROS_INFO("Mode: AUTO.MISSION");
-	}
-	else if (msg.mode == "MANUAL"){
-		if(off_loiter){
-			off_loiter = false;
-			ROS_INFO("Mode: MANUAL.. disabling loiter");
+	if(switch_loiter){
+		if (msg.mode == "MANUAL"){
+			if(off_loiter){
+				off_loiter = false;
+				ROS_INFO("Mode: MANUAL disabling loiter");
+			}
+		}
+		else if(msg.mode == "OFFBOARD"){
+			if(!off_loiter){
+				ROS_INFO("Mode: OFFBOARD.. enabling loiter");
+				cur_setpoint = cur_pos;		//loiter around current position
+				off_loiter = true;
+			}
 		}
 	}
-	else if(msg.mode == "OFFBOARD"){
-		if(!off_loiter){
-			ROS_INFO("Mode: OFFBOARD.. enabling loiter");
-			std_msgs::Bool x;
-			x.data = true;
-			loiterEnableCallback(x);			
-			off_loiter = true;
-		}
-	}
+}
+
+void switchLoiterCallback(const std_msgs::Bool msg){
+	switch_loiter = msg.data;
 }
 
 int main(int argc, char **argv)
@@ -254,6 +255,7 @@ int main(int argc, char **argv)
   ros::Subscriber offloiter_enable_sub = node.subscribe<std_msgs::Bool>("/ceres_control/offboard_loiter_enable",5,&offboardAndLoiterCallback);
   ros::Subscriber reset_sub = node.subscribe<std_msgs::Bool>("/ceres_control/reset",5,&resetCallback);
   ros::Subscriber state_sub = node.subscribe<mavros::State>("/mavros/state",5,&mavStateCallback);
+  ros::Subscriber switch_loiter_sub = node.subscribe<std_msgs::Bool>("/ceres_control/switch_loiter",5,&switchLoiterCallback);
 
   ros::Rate loop_rate(10);
 
@@ -263,6 +265,7 @@ int main(int argc, char **argv)
   path_enable = false;
   cur_path_index = 0;
   safe_setpoint = home_position;
+  switch_loiter = true;
 
   //TODO: streamline this with the knowledge of threading
   while (ros::ok())
