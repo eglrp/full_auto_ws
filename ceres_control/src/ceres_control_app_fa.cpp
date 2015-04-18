@@ -16,8 +16,11 @@
 
 #include "mavros/CommandBool.h"
 #include "mavros/State.h"
+#include "mavros/SetMode.h"
 #include "ceres_control/DetectionStats.h"
 #include "ceres_control/ChangeState.h"
+#include "ceres_control/ChangeBehavior.h"
+#include "ceres_control/ChangeMode.h"
 
 /*
 
@@ -44,9 +47,13 @@ Useful Stuff:
 using namespace std;
 
 geometry_msgs::Pose cur_position;
-
-// bool setpoint_enable;
-// bool in_offboard = false;	
+geometry_msgs::Pose home_position; 
+geometry_msgs::Pose safe_setpoint; 
+geometry_msgs::Pose center_position;
+geometry_msgs::Pose loiterSp;
+geometry_msgs::Pose offboardSp;
+geometry_msgs::Pose path[5];
+int cur_path_ind; 
 
 enum Mode{
 	Manual,
@@ -54,9 +61,31 @@ enum Mode{
 	OffboardSetpoint,	   //Quad has a setpoint to go to
 	OffboardMission,	   //Quad following path
 	GPS,				      //Quad being controlle in GPS
-	FS 					   //Quad control in Failsafe mode
+	FS, 					   //Quad control in Failsafe mode
+	Other
 };
 Mode quad_mode;
+
+static const char * ModeStrings[] = { "manual", "off_loiter", "off_sp", "off_mission", "gps", "other" };
+
+const char * getModeString(int enumVal){
+  return ModeStrings[enumVal];
+}
+
+enum Behavior{
+	LocalLoiter,			//Quad loitering around a safe constant vision setpoint
+	LocalSetpoint,	   	//Quad has a setpoint to go to
+	LocalMission,	   	//Quad following path
+	Autonomous
+};
+Behavior quad_behavior;
+
+static const char * BehaviorStrings[] = { "local_loiter", "local_sp", "local_mission" };
+
+const char * getBehaviorString(int enumVal){
+  return BehaviorStrings[enumVal];
+}
+
 
 bool toggleOffboard(bool state){
 	ros::NodeHandle node;
@@ -76,49 +105,18 @@ bool toggleOffboard(bool state){
 	delete &offboard_cmd;
 }
 
-// // TODO: ROS service call to programmatically enable GPS mode
-// bool changeMode(int mode){
-// 	ros::NodeHandle node;
-// 	ros::ServiceClient gps_caller = node.serviceClient<mavros::CommandBool>("/mavros/set_mode");
-// 	mavros::SetMode gps_mode;
-// 	gps_mode.request.base_mode = mode;
-//  	if(gps_caller.call(gps_mode)){
-//  		quad_mode = GPS;
-//  		return true;
-//  	}
-// 	else{
-//  		quad_mode = LocalLoiter;
-// 		return false;
-// 	}
-// 	delete node;
-// 	delete gps_cmd;
-// 	delete gps_caller;
-// }
-
-// void switchModeCallback(const ceres_control::ChangeMode msg){
-// 	ROS_INFO("Received Manual setpoint.. Updating..");
-// 	return;
-// }
-
-// void setManualSetpointCallback(const geometry_msgs::Pose p){
-// 	ROS_INFO("Received Manual setpoint.. Updating..");
-// 	cur_setpoint = p;
-// 	quad_mode = Control_SP;
-// 	return;
-// }
-
 void curPosCallback(const geometry_msgs::PoseStamped cps){
 	cur_position = cps.pose;
 	return;
 }	
 
 void detectionStatsCallback(const ceres_control::DetectionStats ds_msg){
-	//TODO: what about going back? handle later & what about MISSION mode- how?
-	if(ds_msg.det_percentage > 60.0 && quad_mode == Manual){
+	if(ds_msg.det_percentage > 60.0 && quad_behavior == Autonomous){
 		ROS_INFO("Detected AprilTag for more than 50 percent time in the last 3 seconds, going to offboard");
 		if(toggleOffboard(true)){
 			ROS_INFO("Successfully toggled to Offboard");
-			quad_mode = OffboardLoiter;
+			quad_mode = OffboardSetpoint;
+			offboardSp = center_position;
 		}
 	}
 	else if(ds_msg.det_percentage < 30.0 && quad_mode != Manual){
@@ -137,14 +135,6 @@ float distanceFromTarget(geometry_msgs::Pose p1,geometry_msgs::Pose p2){
 			(p1.position.z-p2.position.z)*(p1.position.z-p2.position.z));
 }
 
-geometry_msgs::Pose home_position; 
-geometry_msgs::Pose safe_setpoint; 
-geometry_msgs::Pose loiterSp;
-geometry_msgs::Pose offboardSp;
-geometry_msgs::Pose path[5];
-
-int cur_path_ind; 
-
 void initHome(){
 	home_position.position.x = 0.5;
 	home_position.position.y = -0.6;
@@ -158,6 +148,13 @@ void initHome(){
 
 void init(){
    quad_mode = OffboardLoiter;
+   center_position.position.x = 0.5;
+   center_position.position.y = -0.6;
+   center_position.position.z = 4.0;
+   center_position.orientation.x = 0.;
+   center_position.orientation.y = 0.;
+   center_position.orientation.z = 0.;
+   center_position.orientation.w = 1.0;
    initHome();
    safe_setpoint = home_position;
 	path[0].position.x = 1.0;
@@ -183,6 +180,75 @@ void init(){
 	cur_path_ind = 0;
 }
 
+// THIS IS ALWAYS SUPERIOR TO ANY MODE SET BY COMPUTER
+void mavStateCallback(mavros::State msg){
+		if (msg.mode == "MANUAL")
+			quad_mode = Manual;
+		else if(msg.mode == "OFFBOARD"){
+			//TODO: do stuff according to behavior
+			switch(quad_behavior){ 
+			case LocalLoiter:
+				quad_mode = OffboardLoiter;
+				loiterSp = cur_position;
+				break;
+			case LocalMission:
+				quad_mode = OffboardMission;
+				break;
+			case LocalSetpoint:
+				quad_mode = OffboardSetpoint;
+				break;
+			}
+		}
+		else if(msg.mode == "AUTO.MISSION" || msg.mode == "AUTO.LOITER")
+			quad_mode = GPS;
+		else
+			quad_mode = Other;
+}
+
+bool changeBehavior(ceres_control::ChangeBehavior::Request &req,
+	ceres_control::ChangeBehavior::Response &res){
+	if(req.behavior == "loiter"){
+		quad_behavior = LocalLoiter;
+		loiterSp = cur_position;
+		res.success = true;
+	}
+	else if(req.behavior == "mission"){
+		quad_behavior = LocalMission;
+		cur_path_ind = 0;
+		res.success = true;
+	}
+	else if(req.behavior == "waypoint"){
+		quad_behavior = LocalSetpoint;
+		offboardSp.position.x = req.x;
+		offboardSp.position.y = req.y;
+		offboardSp.position.z = req.z;
+		res.success = true;
+	}
+	else if(req.behavior == "auto"){
+		quad_behavior = Autonomous;
+		res.success = true;
+	}
+	else
+		res.success = false;	
+	return true;
+}
+
+bool changeMode(ceres_control::ChangeMode::Request &req,
+	ceres_control::ChangeMode::Response &res){
+	//TODO: this has somewhat complex behavior, it will first call mavros service
+	// to see if the quad mode on Pixhawk changes
+	ros::NodeHandle node;
+	ros::ServiceClient m_cli = node.serviceClient<mavros::CommandBool>("/mavros/set_mode");
+	mavros::SetMode m_srv;
+	m_srv.request.base_mode = 0;
+	m_srv.request.custom_mode = req.mode;
+ 	res.success = m_cli.call(m_srv);
+	delete &node;
+	delete &m_cli;
+	delete &m_srv;
+	return true;
+}
+
 int main(int argc, char **argv)
 {
 	//ROS stuff
@@ -199,12 +265,12 @@ int main(int argc, char **argv)
 
 	// Information sources relevent to control
 	ros::Subscriber cur_pos_subscriber = node.subscribe<geometry_msgs::PoseStamped>("/mavros/position/local",5,&curPosCallback);
-	// ros::Subscriber cur_state_subscriber = node.subscribe<mavros::State>("/mavros/state",100,&curPosCallback);
+	ros::Subscriber state_sub = node.subscribe<mavros::State>("/mavros/state",5,&mavStateCallback);
 	ros::Subscriber det_stats_sub = node.subscribe<ceres_control::DetectionStats>("/cerestags/at_det_stats",5,&detectionStatsCallback);
-	// ros::Subscriber setpoint_enable_sub = node.subscribe<std_msgs::Bool>("/ceres_control/setpoint_enable",5,&setPointEnableCallback);
-	// ros::Subscriber state_sub = node.subscribe<ceres_control::ChangeState>("/ceres_control/change_state",5,&changeStateCallback);
-	// ros::Subscriber man_setpoint_sub = node.subscribe<geometry_msgs::Pose>("/ceres_control/set_setpoint",5,&setSPCallback);
 		
+	ros::ServiceServer behavior_srv = node.advertiseService("ceres_control/behavior",&changeBehavior);
+	ros::ServiceServer mode_srv = node.advertiseService("ceres_control/mode",&changeMode);
+
   	//some init stuff
   	init();
 	int count = 0;
@@ -214,9 +280,11 @@ int main(int argc, char **argv)
 			case OffboardLoiter:
 			sp.pose.position = loiterSp.position;
 			sp.pose.orientation = loiterSp.orientation;
+			// ROS_INFO("Tag0");
 		 	break;
 
 			case OffboardSetpoint:
+			// ROS_INFO("Tag1");
 			sp.pose = offboardSp;
 			break;
 
@@ -228,10 +296,18 @@ int main(int argc, char **argv)
 			sp.pose = path[cur_path_ind];
 			break;
 
+			case Manual:
+			// ROS_INFO("Tag2");
+			sp.pose = center_position;
+			break;
+
+
 			case FS:
+			// ROS_INFO("Tag3");
 			break;
 
 			case GPS:
+			// ROS_INFO("Tag4");
 			break;
 		}
 
@@ -239,8 +315,8 @@ int main(int argc, char **argv)
 		float y_diff = sp.pose.position.y - cur_position.position.y;
 		float z_diff = sp.pose.position.z - cur_position.position.z;
 		
-		if (abs(x_diff) > 3.0 || abs(y_diff) > 3.0 || abs(z_diff) > 3.0){
-			ROS_INFO("RED_FLAG: Insane setpoint request, sending current position, please make a sensible setpoint request!");
+		if (abs(x_diff) > 3.0 || abs(y_diff) > 3.0 || abs(z_diff) > 3.5){
+			ROS_INFO("RED_FLAG!");
 			sp.pose = home_position;
 			// TODO: shift to manual control? FS mode?
 		}
@@ -255,6 +331,8 @@ int main(int argc, char **argv)
    	loop_rate.sleep();
     
 		if(!(count % 10)){
+			ROS_INFO("OffboardSp: %f %f %f\t",offboardSp.position.x,offboardSp.position.y,offboardSp.position.z);
+			ROS_INFO("Quad Mode: %s\tOffboard Behavior: %s",getModeString(quad_mode),getBehaviorString(quad_behavior));
 			ROS_INFO("Current position is: %f %f %f",cur_position.position.x,cur_position.position.y,cur_position.position.z);
 			ROS_INFO("Current setpoint being sent to MAVROS is: %f %f %f",sp.pose.position.x,sp.pose.position.y,sp.pose.position.z);
 			ROS_INFO("Distance from setpoint is : %f",distanceFromTarget(cur_position,sp.pose));

@@ -15,14 +15,13 @@ add_message_files(DIRECTORY msg FILES
   ChangeState.msg
 )
 
-# add_service_files(FILES
-#   ModeOffLoiter.srv
-#   ModeOffSetpoint.srv
+ add_service_files(FILES
 #   ModeAutoLoiter.srv
 #   ModeAutoMission.srv
-#   ModePath.srv
 #   Offboard.srv
-# )
+    ChangeBehavior.srv
+    ChangeMode.srv
+ )
 
 generate_messages(DEPENDENCIES
   std_msgs
