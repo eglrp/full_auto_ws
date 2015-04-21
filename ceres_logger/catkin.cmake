@@ -8,8 +8,7 @@ find_package(catkin REQUIRED COMPONENTS
 )
 
 # add_message_files(DIRECTORY msg FILES
-   # AprilTagDetection.msg
-   # AprilTagDetections.msg
+
 # )
 
 # generate_messages(DEPENDENCIES
@@ -27,7 +26,6 @@ catkin_package(
                 message_generation
 		            message_runtime
                 geometry_msgs
-	# ../../../../../../../opt/ros/indigo/include
 )
 
 include_directories(
@@ -35,9 +33,9 @@ include_directories(
     ${catkin_INCLUDE_DIRS}
 )
 
-add_executable(cereslogger src/ceres_logger.cpp)
-target_link_libraries(cereslogger ${catkin_LIBRARIES})
-add_dependencies(cereslogger ${PROJECT_NAME}_gencpp)
+add_executable(ceres_logger src/ceres_logger.cpp)
+target_link_libraries(ceres_logger ${catkin_LIBRARIES})
+add_dependencies(ceres_logger ${PROJECT_NAME}_gencpp)
 
 install(TARGETS cereslogger
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION} 

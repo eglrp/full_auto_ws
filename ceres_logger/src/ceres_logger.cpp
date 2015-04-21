@@ -25,6 +25,7 @@ using namespace std;
 geometry_msgs::cur_cp;
 geometry_msgs::cur_ct;
 geometry_msgs::cur_sp;
+float det_per;
 
 
 void ctCallback(const geometry_msgs::PoseStamped ct){
@@ -47,6 +48,14 @@ void spCallback(const geometry_msgs::PoseStamped sp){
   prev_t = ros::Time::now();
 }
 
+void dsCallback(const cerestags::DetectionStats msg){
+  static ros::Time prev_t = ros::Time::now();
+  det_per = msg.det_percentage;
+  if ((ros::Time::now() - prev_t).toSec() < 2)
+    ROS_INFO("Timeout on Detection Stats topic");
+  prev_t = ros::Time::now();
+}
+
 int main(int argc, char **argv)
 {
   struct timeval tv;
@@ -54,23 +63,23 @@ int main(int argc, char **argv)
 
   ROS_INFO("Ceres logger node started.");
 
-  ros::init(argc, argv, "cereslogger");
+  ros::init(argc, argv, "ceres_logger");
   ros::NodeHandle node;
   
   ros::Subscriber cp_sub = node.subscribe<geometry_msgs::PoseStamped>("/mavros/position/vision",5,&cpCallback);
   ros::Subscriber sp_sub = node.subscribe<geometry_msgs::PoseStamped>("/ceres_control/set_position",5,&spCallback);
   ros::Subscriber ct_sub = node.subscribe<geometry_msgs::PoseStamped>("/cerestags/vision",5,&ctCallback);
+  ros::Subscriber ds_sub = node.subscribe<cerestags::DetectionStats>("/cerestags/det_stats",5,&dsCallback);
 
   ros::Rate loop_rate(10);
 
-  while (ros::ok())
-  {
+  while (ros::ok()){
     ros::spinOnce();
     // NOTE: time is current time and not time of update of individual data
-    ROS_INFO("Time: %f\tCP: %f %f %f\tSP: %f %f %f\tCT: %f %f %f",
-      ros::Time::now(),cur_cp.pose.x,cur_cp.pose.y,cur_cp.pose.z,
-        cur_sp.pose.x,cur_sp.pose.y,cur_sp.pose.z,
-          cur_ct.pose.x,cur_ct.pose.y,cur_ct.pose.z);
+    ROS_INFO("Time: %f\tCP: %f %f %f\tSP: %f %f %f\tCT: %f %f %f\tDS: %f",
+      ros::Time::now(),cur_cp.position.x,cur_cp.position.y,cur_cp.position.z,
+        cur_sp.position.x,cur_sp.position.y,cur_sp.position.z,
+          cur_ct.position.x,cur_ct.position.y,cur_ct.position.z,det_per);
     loop_rate.sleep();
   }
 
