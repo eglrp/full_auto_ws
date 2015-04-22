@@ -53,7 +53,7 @@ mission:
 #    tf_rate_limit: 10.0
 
 # *_setpoint
-#setpoint:
+setpoint:
 #  # setpoint_accel
 #  accel:
 #    send_force: false
@@ -67,12 +67,12 @@ mission:
 #    child_frame_id: "attitude"
 #    tf_rate_limit: 10.0
 #
-#  # setpoint_position
-#  position:
-#    listen_tf: false
-#    frame_id: "local_origin"
-#    child_frame_id: "setpoint"
-#    tf_rate_limit: 10.0
+ # setpoint_position
+ position:
+   listen_tf: false
+   frame_id: "local_origin"
+   child_frame_id: "setpoint"
+   tf_rate_limit: 10.0
 #
 #  # setpoint_velocity
 #  # None

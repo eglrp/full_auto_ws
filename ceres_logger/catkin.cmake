@@ -19,7 +19,6 @@ find_package(catkin REQUIRED COMPONENTS
 # Set up the ROS Catkin package settings
 catkin_package(
   INCLUDE_DIRS 
-  include
   CATKIN_DEPENDS std_msgs
                 roscpp
                 cmake_modules
@@ -37,6 +36,6 @@ add_executable(ceres_logger src/ceres_logger.cpp)
 target_link_libraries(ceres_logger ${catkin_LIBRARIES})
 add_dependencies(ceres_logger ${PROJECT_NAME}_gencpp)
 
-install(TARGETS cereslogger
+install(TARGETS ceres_logger
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION} 
 )
