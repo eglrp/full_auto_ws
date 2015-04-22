@@ -1,7 +1,6 @@
 #include <iostream>
 #include <sstream>
 #include <fstream>
-#include <mutex>
 #include <cstring>
 #include <cmath>
 
@@ -27,6 +26,7 @@
 #include <boost/make_shared.hpp>
 
 #include <cerestags/DetectionStats.h>
+#include <cerestags/EnableZoh.h>
 
 #include "opencv2/opencv.hpp"
 #include <opencv/cv.h>
@@ -52,11 +52,11 @@ const int HISTORY_WINDOW = 15;
 using namespace std;
 
 //global stuff
-std::mutex pose_mutex;
 geometry_msgs::Pose globalPose;
 geometry_msgs::PoseWithCovariance globalPoseWC;
 AprilTags::TagDetector* m_tagDetector = NULL;
 AprilTags::TagCodes m_tagCodes(AprilTags::tagCodes25h9);
+AprilTags::TagCodes m_annTag(AprilTags::tagCodes64);
 RunningStats m_runningStats[3];
 bool m_timing = false;; // print timing information for each tag extraction call
 int cur = 0;
@@ -114,17 +114,31 @@ void processImage(cv::Mat& image_gray) {
   }
 
   if(detections.size()){
+    //stack all ps and Ps and solvePnP
     std::vector<cv::Point3f> objPts;
     std::vector<cv::Point2f> imgPts;
-    double s = m_tagSize/2.;
+    double s = 0.105/2.;
     double centre_dist = 0.3;
     int grid_c = 5;
     double x_c,y_c;  // bottom left AT, x y
+
+    AprilTags::TagDetection ann_det;
+    bool annDet = false;
+    bool gridDet = false;
     for (int i=0; i<detections.size(); i++) {
-      // NOTE: uncomment this in case you want to reject too close ATs
-      // if(detections[i].id % 2)
-      //   continue;
-      int num = detections[i].id-1;    //because our grid starts with 1 at top left
+      
+      // This is for the Big Annular April Tag- reject for now
+      // TODO: incorp pose from this as well and then fuse
+      if(detections[i].id == 0 && m_tagDetector->isUsingAnn){
+        ann_det = detections[i];
+        annDet = true;
+        continue;
+      }
+      else{
+        gridDet = true;
+      }
+
+      int num = detections[i].id-1;    //starts with 1 at top left
       int row = num / grid_c;
       int col = num % grid_c;
       x_c = double(col) * centre_dist; 
@@ -143,75 +157,127 @@ void processImage(cv::Mat& image_gray) {
       imgPts.push_back(cv::Point2f(p2.first, p2.second));
       imgPts.push_back(cv::Point2f(p3.first, p3.second));
       imgPts.push_back(cv::Point2f(p4.first, p4.second)); 
+
     }
-
-    if(!objPts.size())
-      return;
-
-    cv::Mat rvec, tvec;
     cv::Matx33f cameraMatrix(
                              m_fx, 0, m_px,
                              0, m_fy, m_py,
                              0,  0,  1);
     cv::Vec4f distParam(0,0,0,0); // all 0?
-    cv::solvePnP(objPts, imgPts, cameraMatrix, distParam, rvec, tvec);
-    // NOTE: can chose between RANSAC and normal solvepPnP. Atm normal works better
-    // cv::solvePnPRansac(objPts, imgPts, cameraMatrix, distParam, rvec, tvec,
-    //   false,100,8.0,(0.95 * float(detections.size()) * 4.0));
 
-    cv::Mat r;
-    cv::Rodrigues(rvec, r);
 
-    r = r.t();
-    cv::Mat new_tvec(-r * tvec);
+    double g_x,g_y,g_z;
+    double g_yaw, g_pitch, g_roll;
+    Eigen::Matrix3d g_wRo;
+    if(objPts.size()){
 
-    Eigen::Matrix3d wRo;
-    wRo <<  r.at<double>(0,0), r.at<double>(0,1), r.at<double>(0,2), 
-            r.at<double>(1,0), r.at<double>(1,1), r.at<double>(1,2),
-            r.at<double>(2,0), r.at<double>(2,1), r.at<double>(2,2);
-    double yaw, pitch, roll;
-    double x,y,z;
-    wRo_to_euler(wRo, yaw, pitch, roll);
-    x = new_tvec.at<double>(0);
-    y = new_tvec.at<double>(1);
-    z = new_tvec.at<double>(2);
+      cv::Mat rvec, tvec;
+      cv::solvePnP(objPts, imgPts, cameraMatrix, distParam, rvec, tvec);
+      // NOTE: can chose between RANSAC and normal solvepPnP. Atm normal works better
+      // cv::solvePnPRansac(objPts, imgPts, cameraMatrix, distParam, rvec, tvec,
+      //   false,100,8.0,(0.95 * float(detections.size()) * 4.0));
 
-    //Outlier flagging
-    if(  fabs(x - m_runningStats[0].Mean()) > 2 * m_runningStats[0].StandardDeviation()
-      || fabs(y - m_runningStats[1].Mean()) > 2 * m_runningStats[1].StandardDeviation()
-      || fabs(z - m_runningStats[2].Mean()) > 2 * m_runningStats[2].StandardDeviation())
-    {
-      ROS_INFO("Flag: %4d %3.4f %3.4f %3.4f Tot: %d",detections.size(),x,y,z,++ignore_cnt);
+      cv::Mat r;
+      cv::Rodrigues(rvec, r);
+
+      r = r.t();  // rotation of inverse
+      cv::Mat new_tvec(-r * tvec); // translation of inverse
+
+      g_wRo <<  r.at<double>(0,0), r.at<double>(0,1), r.at<double>(0,2), 
+              r.at<double>(1,0), r.at<double>(1,1), r.at<double>(1,2),
+              r.at<double>(2,0), r.at<double>(2,1), r.at<double>(2,2);
+      wRo_to_euler(g_wRo, g_yaw, g_pitch, g_roll);
+
+      g_x = new_tvec.at<double>(0);
+      g_y = new_tvec.at<double>(1);
+      g_z = new_tvec.at<double>(2);
+      
+      //Outlier flagging
+      if(  fabs(g_x - m_runningStats[0].Mean()) > 2 * m_runningStats[0].StandardDeviation()
+        || fabs(g_y - m_runningStats[1].Mean()) > 2 * m_runningStats[1].StandardDeviation()
+        || fabs(g_z - m_runningStats[2].Mean()) > 2 * m_runningStats[2].StandardDeviation())
+        ROS_INFO("Flag: %4d %3.4f %3.4f %3.4f Tot: %d",detections.size(),g_x,g_y,g_z,++ignore_cnt);
+
+      m_runningStats[0].Push(g_x);
+      m_runningStats[1].Push(g_y);
+      m_runningStats[2].Push(g_z);
+      ROS_INFO("Grid: %3.4f %3.4f %3.4f %3.4f %3.4f %3.4f",
+        g_x,g_y,g_z,g_yaw,g_pitch,g_roll);
     }
 
-    m_runningStats[0].Push(x);
-    m_runningStats[1].Push(y);
-    m_runningStats[2].Push(z);
-    ROS_INFO("%4d %3.4f %3.4f %3.4f %3.4f %3.4f %3.4f", detections.size(),
-      x, y, z,
-        yaw,pitch,roll);
-    Eigen::Quaterniond q(wRo);
-    pose_mutex.lock();
-    globalPose.position.x = x;
-    globalPose.position.y = y;
-    globalPose.position.z = z;
-    globalPose.orientation.w = 1.0;//q.w();
-    globalPose.orientation.x = 0.0;//q.x();
-    globalPose.orientation.y = 0.0;//q.y();
-    globalPose.orientation.z = 0.0;//q.z();
+    {
+      // Estimation from big tag
+      double a_x,a_y,a_z;
+      double a_yaw,a_pitch,a_roll;
+      Eigen::Matrix3d a_wRo;  
+      if(annDet){
+        objPts.clear();
+        imgPts.clear();
 
-    globalPoseWC.pose = globalPose;
-    globalPoseWC.covariance[0] = 0.0000000001;//m_runningStats[0].Variance();
-    globalPoseWC.covariance[7] = 0.0000000001;//m_runningStats[1].Variance();
-    globalPoseWC.covariance[14] = 0.0000000001;//m_runningStats[2].Variance();
-    globalPoseWC.covariance[21] = 0.0;
-    globalPoseWC.covariance[28] = 0.0; 
-    globalPoseWC.covariance[35] = 0.0;
-    pose_mutex.unlock();
-    updated = true;
-    prev_t = cur_t;
-    cur_t = tic();
+        objPts.push_back(cv::Point3f(-0.3, -0.3, 0));
+        objPts.push_back(cv::Point3f( 0.3, -0.3, 0));
+        objPts.push_back(cv::Point3f( 0.3,  0.3, 0));
+        objPts.push_back(cv::Point3f(-0.3,  0.3, 0));
+
+        std::pair<float, float> p1 = ann_det.p[0];
+        std::pair<float, float> p2 = ann_det.p[1];
+        std::pair<float, float> p3 = ann_det.p[2];
+        std::pair<float, float> p4 = ann_det.p[3];
+        imgPts.push_back(cv::Point2f(p1.first, p1.second));
+        imgPts.push_back(cv::Point2f(p2.first, p2.second));
+        imgPts.push_back(cv::Point2f(p3.first, p3.second));
+        imgPts.push_back(cv::Point2f(p4.first, p4.second));
+        cv::Mat rvec, tvec;
+        cv::solvePnP(objPts, imgPts, cameraMatrix, distParam, rvec, tvec);
+        cv::Mat r;
+        cv::Rodrigues(rvec, r);
+
+        r = r.t();                    // rotation of inverse
+        cv::Mat new_tvec(-r * tvec); // translation of inverse
+
+        a_wRo <<  r.at<double>(0,0), r.at<double>(0,1), r.at<double>(0,2), 
+                 r.at<double>(1,0), r.at<double>(1,1), r.at<double>(1,2),
+                 r.at<double>(2,0), r.at<double>(2,1), r.at<double>(2,2);
+        wRo_to_euler(a_wRo, a_yaw, a_pitch, a_roll);
+        a_x = new_tvec.at<double>(0);
+        a_y = new_tvec.at<double>(1);
+        a_z = new_tvec.at<double>(2);
+        
+        //Outlier flagging
+        if(  fabs(a_x - m_runningStats[0].Mean()) > 2 * m_runningStats[0].StandardDeviation()
+          || fabs(a_y - m_runningStats[1].Mean()) > 2 * m_runningStats[1].StandardDeviation()
+          || fabs(a_z - m_runningStats[2].Mean()) > 2 * m_runningStats[2].StandardDeviation())
+          ROS_INFO("Flag: %4d %3.4f %3.4f %3.4f Tot: %d",detections.size(),a_x,a_y,a_z,++ignore_cnt);
+
+        m_runningStats[0].Push(a_x);
+        m_runningStats[1].Push(a_y);
+        m_runningStats[2].Push(a_z);
+        ROS_INFO("Annular: %3.4f %3.4f %3.4f %3.4f %3.4f %3.4f",
+          a_x,a_y,a_z,a_yaw,a_pitch,a_roll);
+      }
+    }
+    if(gridDet){
+      Eigen::Quaterniond q(g_wRo);
+      globalPose.position.x = g_x;
+      globalPose.position.y = g_y;
+      globalPose.position.z = g_z;
+      globalPose.orientation.w = 1.0;//q.w();
+      globalPose.orientation.x = 0.0;//q.x();
+      globalPose.orientation.y = 0.0;//q.y();
+      globalPose.orientation.z = 0.0;//q.z();
+
+      globalPoseWC.pose = globalPose;
+      globalPoseWC.covariance[0] = 0.0000000001;//m_runningStats[0].Variance();
+      globalPoseWC.covariance[7] = 0.0000000001;//m_runningStats[1].Variance();
+      globalPoseWC.covariance[14] = 0.0000000001;//m_runningStats[2].Variance();
+      globalPoseWC.covariance[21] = 0.0;
+      globalPoseWC.covariance[28] = 0.0; 
+      globalPoseWC.covariance[35] = 0.0;
+      updated = true;
+      prev_t = cur_t;
+    }
   }
+  cur_t = tic();  
 }
 
 void imageCallback(const sensor_msgs::ImageConstPtr& msg)
@@ -231,14 +297,20 @@ void imageCallback(const sensor_msgs::ImageConstPtr& msg)
   processImage(cur_image_gray);
 }
 
-void zohEnableCallback(const std_msgs::Bool msg){
-  enable_zoh = msg.data;
+bool switchZoh(cerestags::EnableZoh::Request &req, cerestags::EnableZoh::Response &res){
+  enable_zoh = req.enable;
+  if(enable_zoh)
+    ROS_INFO("Enabling Zero Order Hold");
+  else
+    ROS_INFO("Disabling Zero Order Hold");
+  res.success = true;
+  return true;
 }
 
 int main(int argc, char **argv)
 {
   // init apriltags detector
-  m_tagDetector = new AprilTags::TagDetector(m_tagCodes);
+  m_tagDetector = new AprilTags::TagDetector(m_tagCodes,m_annTag);
 
   // init ROS stuff
   ros::init(argc,argv,"cerestags");
@@ -251,9 +323,6 @@ int main(int argc, char **argv)
   // queue size 1 because we want to work with the latest image always
   image_transport::Subscriber sub = it.subscribe("/usb_cam/image_raw", 1, imageCallback);
 
-  ros::Subscriber enable_zoh_sub = 
-      nh.subscribe<std_msgs::Bool>("/cerestags/zoh_enable",1,&zohEnableCallback);
-
   geometry_msgs::PoseStamped p;
   ros::Publisher pose_publisher = nh.advertise<geometry_msgs::PoseStamped>("/cerestags/vision",1);
 
@@ -263,7 +332,9 @@ int main(int argc, char **argv)
   
   cerestags::DetectionStats stats_msg;
   ros::Publisher dets_stats_pub = 
-      nh.advertise<cerestags::DetectionStats>("/cerestags/det_stats",100);
+      nh.advertise<cerestags::DetectionStats>("/cerestags/at_det_stats",1);
+
+  ros::ServiceServer zoh_srv = nh.advertiseService("cerestags/zoh",&switchZoh);
 
   //init stats stuff
   int cnt = 0;
@@ -278,10 +349,8 @@ int main(int argc, char **argv)
   while (ros::ok())
   {
     if(updated || enable_zoh){
-      pose_mutex.lock();
       p.pose = globalPose;
       pwc.pose = globalPoseWC;
-      pose_mutex.unlock();
       p.header.seq = cnt;
       p.header.frame_id = "vision";
       p.header.stamp = ros::Time::now();

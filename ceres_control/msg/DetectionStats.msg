@@ -1,4 +1,4 @@
 Header header
 float32 det_percentage
 float32 det_fps
-int32 secs_till_last
+float32 secs_till_last
