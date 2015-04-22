@@ -1,3 +1,4 @@
+# behaviors are: loiter, mission, waypoint, auto
 string behavior
 float64 x
 float64 y

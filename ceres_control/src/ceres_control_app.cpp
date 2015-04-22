@@ -14,9 +14,9 @@
 #include <sstream>
 #include <fstream>
 
-#include "mavros/CommandBool.h"
+// #include "mavros/CommandBool.h"
 #include "mavros/State.h"
-#include "mavros/SetMode.h"
+#include <mavros/SetMode.h>
 #include "ceres_control/DetectionStats.h"
 #include "ceres_control/ChangeState.h"
 #include "ceres_control/ChangeBehavior.h"
@@ -66,7 +66,7 @@ enum Mode{
 };
 Mode quad_mode;
 
-static const char * ModeStrings[] = { "manual", "off_loiter", "off_sp", "off_mission", "gps", "other" };
+static const char * ModeStrings[] = { "manual", "off_loiter", "off_sp", "off_mission", "gps", "fs", "other" };
 
 const char * getModeString(int enumVal){
   return ModeStrings[enumVal];
@@ -80,53 +80,34 @@ enum Behavior{
 };
 Behavior quad_behavior;
 
-static const char * BehaviorStrings[] = { "local_loiter", "local_sp", "local_mission" };
+static const char * BehaviorStrings[] = { "local_loiter", "local_sp", "local_mission", "full_auto" };
 
 const char * getBehaviorString(int enumVal){
   return BehaviorStrings[enumVal];
 }
 
-
-bool toggleOffboard(bool state){
-	ros::NodeHandle node;
-	ros::ServiceClient offboard_caller = node.serviceClient<mavros::CommandBool>("/mavros/cmd/guided_enable");
-	mavros::CommandBool offboard_cmd;
-	offboard_cmd.request.value = state;
- 	if(offboard_caller.call(offboard_cmd)){
- 		quad_mode = OffboardSetpoint;
- 		return true;
- 	}
-	else{
- 		quad_mode = Manual;
-		return false;
-	}
-	delete &node;
-	delete &offboard_caller;
-	delete &offboard_cmd;
-}
+// bool toggleOffboard(bool state){
+// 	ros::NodeHandle node;
+// 	ros::ServiceClient offboard_caller = node.serviceClient<mavros::CommandBool>("/mavros/cmd/guided_enable");
+// 	mavros::CommandBool offboard_cmd;
+// 	offboard_cmd.request.value = state;
+//  	if(offboard_caller.call(offboard_cmd)){
+//  		quad_mode = OffboardSetpoint;
+//  		return true;
+//  	}
+// 	else{
+//  		quad_mode = Manual;
+// 		return false;
+// 	}
+// 	delete &node;
+// 	delete &offboard_caller;
+// 	delete &offboard_cmd;
+// }
 
 void curPosCallback(const geometry_msgs::PoseStamped cps){
 	cur_position = cps.pose;
 	return;
 }	
-
-void detectionStatsCallback(const ceres_control::DetectionStats ds_msg){
-	if(ds_msg.det_percentage > 60.0 && quad_behavior == Autonomous){
-		ROS_INFO("Detected AprilTag for more than 50 percent time in the last 3 seconds, going to offboard");
-		if(toggleOffboard(true)){
-			ROS_INFO("Successfully toggled to Offboard");
-			quad_mode = OffboardSetpoint;
-			offboardSp = center_position;
-		}
-	}
-	else if(ds_msg.det_percentage < 30.0 && quad_mode != Manual){
-		ROS_INFO("Not detecting enough AprilTags, going to manual");
-		if(toggleOffboard(false)){
-			ROS_INFO("Successfully toggled to Manual");
-			quad_mode = Manual;
-		}
-	}
-}
 
 // TODO: refactor with some ROS equivalent to reduce code
 float distanceFromTarget(geometry_msgs::Pose p1,geometry_msgs::Pose p2){
@@ -233,20 +214,54 @@ bool changeBehavior(ceres_control::ChangeBehavior::Request &req,
 	return true;
 }
 
-bool changeMode(ceres_control::ChangeMode::Request &req,
-	ceres_control::ChangeMode::Response &res){
-	//TODO: this has somewhat complex behavior, it will first call mavros service
-	// to see if the quad mode on Pixhawk changes
+bool changeMode(string mode_str){
 	ros::NodeHandle node;
-	ros::ServiceClient m_cli = node.serviceClient<mavros::CommandBool>("/mavros/set_mode");
+	ros::ServiceClient m_cli = node.serviceClient<mavros::SetMode>("/mavros/set_mode");
 	mavros::SetMode m_srv;
 	m_srv.request.base_mode = 0;
-	m_srv.request.custom_mode = req.mode;
- 	res.success = m_cli.call(m_srv);
-	delete &node;
-	delete &m_cli;
-	delete &m_srv;
+	m_srv.request.custom_mode = mode_str;
+ 	bool s = m_cli.call(m_srv);
+	return s;
+}
+
+bool changeMode(ceres_control::ChangeMode::Request &req,
+	ceres_control::ChangeMode::Response &res){
+ 	res.success = changeMode(req.mode);
 	return true;
+}
+
+void detectionStatsCallback(const ceres_control::DetectionStats ds_msg){
+	if(quad_behavior == Autonomous){
+		if(ds_msg.det_percentage > 60.0 && quad_mode == GPS){
+			ROS_INFO("Detected AprilTag > 60 percent time, going to offboard");
+			if(changeMode("OFFBOARD")){
+				ROS_INFO("Successfully toggled to Offboard");
+				quad_mode = OffboardSetpoint;
+				offboardSp = center_position;
+			}
+			else{
+				ROS_INFO("CRITICAL: Can't switch modes!");
+			}
+		}
+		else if(ds_msg.det_percentage < 30.0 && 
+			(quad_mode == OffboardLoiter || 
+				quad_mode == OffboardSetpoint || 
+				quad_mode == OffboardMission)){
+			ROS_INFO("Not detecting enough AprilTags, going to GPS");
+			if(changeMode("AUTO.LOITER")){
+				ROS_INFO("Successfully toggled to AUTO.LOITER");
+				quad_mode = GPS;
+			}
+			else{
+				ROS_INFO("CRITICAL: Can't switch modes!");
+			}
+		}
+	}
+	else{
+		if(ds_msg.det_percentage > 60.0 && quad_mode == GPS){
+			ROS_INFO("Detected AprilTag > 60 percent time, safe to switch to offboard using remote");
+		}
+	}
 }
 
 int main(int argc, char **argv)
@@ -303,7 +318,6 @@ int main(int argc, char **argv)
 			break;
 
 			case GPS:
-			// ROS_INFO("Tag4");
 			break;
 		}
 
@@ -311,10 +325,12 @@ int main(int argc, char **argv)
 		float y_diff = sp.pose.position.y - cur_position.position.y;
 		float z_diff = sp.pose.position.z - cur_position.position.z;
 		
-		if (abs(x_diff) > 3.0 || abs(y_diff) > 3.0 || abs(z_diff) > 3.5){
-			ROS_INFO("RED_FLAG!");
-			sp.pose = home_position;
-			// TODO: shift to manual control? FS mode?
+		if(quad_mode == OffboardSetpoint || quad_mode == OffboardLoiter || quad_mode == OffboardMission){
+			if (abs(x_diff) > 3.0 || abs(y_diff) > 3.0 || abs(z_diff) > 3.5){
+				ROS_INFO("RED_FLAG!");
+				sp.pose = home_position;
+				// TODO: shift to manual control? FS mode?
+			}
 		}
 		sp.header.seq = count;
 		sp.header.frame_id = "local_origin";
