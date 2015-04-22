@@ -1,6 +1,6 @@
 <launch>        
  
    <node pkg="ceres_control" type="ceres_control" name="ceres_control" output="screen">
-    <!-- put params here-->
+	    <remap from="ceres_control/send_setpoint" to="mavros/setpoint/local_position"/>
 	</node>
 </launch>
